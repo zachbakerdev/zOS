@@ -1,0 +1,8 @@
+{
+  name = "Shell",
+  description = "CraftOS command shell (type 'exit' to return)",
+  version = "1.0",
+  author = "zOS",
+  main = "main.lua",
+  order = 5,
+}

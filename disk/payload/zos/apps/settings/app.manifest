@@ -1,0 +1,8 @@
+{
+  name = "Settings",
+  description = "Password, users and computer label",
+  version = "1.0",
+  author = "zOS",
+  main = "main.lua",
+  order = 7,
+}

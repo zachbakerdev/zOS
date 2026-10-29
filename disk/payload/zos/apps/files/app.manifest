@@ -1,0 +1,8 @@
+{
+  name = "Files",
+  description = "Browse, edit, run, copy and delete files",
+  version = "1.0",
+  author = "zOS",
+  main = "main.lua",
+  order = 2,
+}

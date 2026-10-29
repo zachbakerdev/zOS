@@ -1,0 +1,8 @@
+{
+  name = "Calculator",
+  description = "Evaluate maths expressions",
+  version = "1.0",
+  author = "zOS",
+  main = "main.lua",
+  order = 4,
+}

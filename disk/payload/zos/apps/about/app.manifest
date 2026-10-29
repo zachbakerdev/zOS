@@ -1,0 +1,8 @@
+{
+  name = "About",
+  description = "System information",
+  version = "1.0",
+  author = "zOS",
+  main = "main.lua",
+  order = 8,
+}

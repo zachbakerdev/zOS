@@ -1,0 +1,63 @@
+-- zOS bootstrap, installed as /startup.lua by the zOS setup tool.
+--
+-- CraftOS runs this from its shell. If this file ever returned, the user would be
+-- dropped at an unauthenticated shell prompt, so it never does: it either hands
+-- control to /zos/boot.lua forever, or falls back to recovery and reboots.
+
+local nativePullEvent = os.pullEvent
+os.pullEvent = os.pullEventRaw -- Ctrl+T can't terminate us
+
+local function halt(action)
+  action()
+  while true do os.pullEventRaw() end
+end
+
+local ctx = { shell = shell, multishell = multishell, pullEvent = nativePullEvent }
+
+local ok, err = false, "boot.lua is missing"
+local boot = loadfile("/zos/boot.lua", nil, _G)
+if boot then ok, err = pcall(boot, ctx) end
+
+-- Only reached if boot crashed. Offer an admin-only recovery shell.
+term.redirect(term.native())
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.clear()
+term.setCursorPos(1, 1)
+print("zOS failed to start:")
+printError(tostring(err))
+print()
+
+local authOk, auth = pcall(function()
+  local function import(name)
+    return assert(loadfile("/zos/lib/" .. name .. ".lua", nil, _G))(import)
+  end
+  return import("auth")
+end)
+
+if authOk and auth.hasUsers() and auth.lockRemaining() == 0 then
+  print("Log in as an administrator for a recovery shell,")
+  print("or leave the username empty to reboot.")
+  write("Username: ")
+  local name = read()
+  if name ~= "" then
+    write("Password: ")
+    local password = read("*")
+    if auth.isAdmin(name) and auth.verify(name, password) then
+      auth.recordSuccess()
+      os.pullEvent = nativePullEvent
+      print("Recovery shell. Type 'exit' to reboot.")
+      pcall(shell.run, "shell")
+      os.pullEvent = os.pullEventRaw
+    else
+      auth.recordFailure()
+      printError("Access denied.")
+      sleep(2)
+    end
+  end
+else
+  print("Recovery is unavailable. Rebooting in 5 seconds.")
+  sleep(5)
+end
+
+halt(os.reboot)

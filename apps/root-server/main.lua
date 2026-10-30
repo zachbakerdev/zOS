@@ -30,13 +30,29 @@ local function askName(intro, default)
     end
 end
 
+local function askTld(default)
+    local err
+    while true do
+        ui.screen(TITLE)
+        ui.text("Hostnames this server gives out end in this, like zmail." .. default ..
+            ". It can't change while hostnames are in use.", ui.theme.dim)
+        ui.text("")
+        if err then ui.text(err, ui.theme.bad) ui.text("") end
+        local tld = ui.input("Top-level domain", nil, default)
+        local ok, why = trust.validTld(tld)
+        if ok then return tld end
+        err = why
+    end
+end
+
 local function setup()
     local name = askName("This computer will vouch for other computers. Every computer that trusts " ..
         "it will believe what it signs, so choose a server only admins can log in to.", trust.defaultName())
+    local tld = askTld(trust.tldFromName(name))
     crypto.addEntropy(name .. os.clock())
     ui.text("Creating the root key...", ui.theme.dim)
-    db.setup(name)
-    system.log(session.user .. " set up root server " .. name .. " " .. db.fingerprint())
+    db.setup(name, tld)
+    system.log(session.user .. " set up root server " .. name .. " ." .. tld .. " " .. db.fingerprint())
 end
 
 local function showRequest(entry)
@@ -117,7 +133,8 @@ end
 
 local function serverInfo()
     local _, public = db.keypair()
-    ui.pager(TITLE .. " - This server", "Name: " .. db.config().name .. "\nComputer: " .. os.getComputerID() ..
+    ui.pager(TITLE .. " - This server", "Name: " .. db.config().name .. "\nTop-level domain: ." ..
+        db.config().zone.tld .. "\nComputer: " .. os.getComputerID() ..
         "\nPort: " .. net.ROOT_PORT .. "\n\nFingerprint:\n" .. db.fingerprint() ..
         "\n\nPublic key:\n" .. crypto.toHex(public) ..
         "\n\nPeople adding this server in Settings > Network should see this fingerprint.")
@@ -128,6 +145,14 @@ local function rename()
     ui.text("Signing the new name...", ui.theme.dim)
     db.rename(name)
     system.log(session.user .. " renamed the root server to " .. name)
+end
+
+local function changeTld()
+    local tld = askTld(db.config().zone.tld)
+    ui.text("Signing the top-level domain...", ui.theme.dim)
+    local ok, err = db.setTld(tld)
+    if ok then system.log(session.user .. " set the top-level domain to ." .. tld) end
+    done("Hostnames now end in ." .. tld .. ".", ok, err)
 end
 
 local function lifetime()
@@ -149,7 +174,7 @@ local function newKey()
     ui.text("")
     if not ui.confirm("Create a new root key?") then return end
     ui.text("Creating the root key...", ui.theme.dim)
-    db.setup(db.config().name)
+    db.setup(db.config().name, db.config().zone.tld)
     system.log(session.user .. " replaced the root key: " .. db.fingerprint())
     ui.message(TITLE, "New fingerprint: " .. db.fingerprint(), ui.theme.good)
 end
@@ -159,6 +184,7 @@ if not session.admin then
 end
 
 if not db.ready() then setup() end
+db.ensureZone()
 
 local selected = 1
 while true do
@@ -172,6 +198,7 @@ while true do
           hint = "Approve computers and manage certificates", fg = pending > 0 and ui.theme.accent or nil },
         { label = "This server", action = serverInfo, hint = "Name and fingerprint" },
         { label = "Name: " .. config.name, action = rename, hint = "What computers see when they look for roots" },
+        { label = "Top-level domain: ." .. config.zone.tld, action = changeTld, hint = "What hostnames here end in" },
         { label = "Certificates last " .. config.days .. " days", action = lifetime, hint = "How long a signature is good for" },
         { label = "Serving: " .. (config.online and "on" or "OFF"),
           action = function() db.setConfig({ online = not config.online }) end,

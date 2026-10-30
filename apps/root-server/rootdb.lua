@@ -47,11 +47,12 @@ local function refreshAdvert(name)
 end
 
 -- Make a new key. Everything signed with an old key stops being accepted.
-function db.setup(name)
+function db.setup(name, tld)
     local seed, public = crypto.signingKeypair()
     util.writeTable(KEY, { seed = crypto.toHex(seed), key = crypto.toHex(public) })
     util.writeTable(REQUESTS, {})
     refreshAdvert(name)
+    db.setConfig({ zone = trust.signZone(seed, public, tld or trust.tldFromName(name)) })
 end
 
 db.rename = refreshAdvert
@@ -85,6 +86,57 @@ function db.list()
         return a.name:lower() < b.name:lower()
     end)
     return out
+end
+
+-- Plain certificate names have no dot, and hostnames always do.
+local function isHostname(name)
+    return name:find(".", 1, true) ~= nil
+end
+
+-- Set the top-level domain. A hostname can't move, so this only works while none are in use.
+function db.setTld(tld)
+    local ok, why = trust.validTld(tld)
+    if not ok then return false, why end
+    for _, entry in pairs(db.requests()) do
+        if isHostname(entry.name) and (entry.status == "issued" or entry.status == "pending") then
+            return false, "'" .. entry.name .. "' is using the current one. Revoke or refuse its hostname first."
+        end
+    end
+    local seed, public = db.keypair()
+    local zone = trust.signZone(seed, public, tld) -- yields, so check nothing has been asked for since
+    for _, entry in pairs(db.requests()) do
+        if isHostname(entry.name) and entry.status == "pending" then
+            return false, "A new hostname was requested. Try again."
+        end
+    end
+    db.setConfig({ zone = zone })
+    return true
+end
+
+-- Roots set up before top-level domains existed get one from their name. Any dotted names they've
+-- already signed keep working until they expire.
+function db.ensureZone()
+    if db.config().zone then return end
+    local seed, public = db.keypair()
+    db.setConfig({ zone = trust.signZone(seed, public, trust.tldFromName(db.config().name)) })
+end
+
+-- Hostnames have to be in this server's own top-level domain.
+local function hostnameRefused(name)
+    if not isHostname(name) then return nil end
+    local label, tld = trust.parseHost(name)
+    if not label then return tld end
+    if tld ~= db.config().zone.tld then return "Hostnames on this server end in ." .. db.config().zone.tld .. "." end
+end
+
+-- Answer a computer looking up a hostname.
+function db.resolve(name)
+    for _, entry in pairs(db.requests()) do
+        if entry.status == "issued" and entry.name == name and entry.cert.expires > os.epoch("utc") then
+            return { cert = entry.cert }
+        end
+    end
+    return {}
 end
 
 -- Why a certificate can't go to this key, if another one already holds the name or computer.
@@ -144,6 +196,11 @@ function db.handle(name, key, from)
     if taken then return { status = "error", message = taken } end
 
     local entry = db.requests()[key]
+    -- A certificate from before this rule can still be renewed.
+    if not (entry and entry.status == "issued" and entry.name == name) then
+        local refused = hostnameRefused(name)
+        if refused then return { status = "error", message = refused } end
+    end
     if entry and (entry.status == "denied" or entry.status == "revoked") then
         return { status = "denied" }
     end

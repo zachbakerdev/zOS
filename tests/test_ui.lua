@@ -56,6 +56,8 @@ local function scenario(width)
   local rootApp = runScreen(root, "apps/root-server/main.lua", admin, {})
   check("root setup asks for a name", screenHas(root, "Server name"))
   line(root, "Overworld Root")
+  check("asks for a top-level domain", screenHas(root, "Top-level domain"))
+  line(root, "overworld")
   check("root menu appears", screenHas(root, "Requests"))
   local rootFinger = root.env.require("rootdb").fingerprint()
 

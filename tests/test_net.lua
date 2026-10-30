@@ -731,6 +731,46 @@ do
   check("reset gives a new identity", select(2, trustOf(a).identity()) ~= oldKey)
 end
 
+-- A computer with certificates from two roots answers to both names, and `root` tells them apart.
+do
+  local one, two = rootServer(10, "One"), rootServer(11, "Two")
+  local a, b = sim.computer(1), sim.computer(2)
+  b.net.listen(5000)
+  local entryOne = certify(a, one, "alpha")
+  local entryTwo = certify(a, two, "second")
+  trustOf(b).addRoot(entryOne.key, entryOne.name, entryOne.host)
+  trustOf(b).addRoot(entryTwo.key, entryTwo.name, entryTwo.host)
+  a.net.listen(5000)
+  check("expect the first name", send(b, 1, 5000, "x", { expect = "alpha" }))
+  check("expect the second name", send(b, 1, 5000, "x", { expect = "second" }))
+  check("root and its name", send(b, 1, 5000, "x", { expect = "alpha", root = entryOne.key }))
+  check("root and another's name", send(b, 1, 5000, "x", { expect = "alpha", root = entryTwo.key }), nil)
+
+  send(a, 2, 5000, "back")
+  local msg = sim.call(b, function() return b.net.receive(5000, 5) end)
+  check("peer.names has the first", msg.peer.names[entryOne.key], "alpha")
+  check("peer.names has the second", msg.peer.names[entryTwo.key], "second")
+end
+reset()
+
+-- A reply only goes to the key that asked.
+do
+  local a, b = sim.computer(1), sim.computer(2)
+  b.net.listen(5000)
+  sim.spawn(b, function()
+    while true do
+      local msg = b.net.receive(5000)
+      if msg.payload == "swap" then msg.peer = { key = string.rep("ab", 32) } end
+      b.net.reply(msg, "answer")
+    end
+  end)
+  sim.advance(1)
+  check("reply to the same key", sim.call(a, function() return a.net.request(2, 5000, "ask", { timeout = 20 }) end).payload, "answer")
+  local nope = sim.call(a, function() return a.net.request(2, 5000, "swap", { timeout = 20 }) end, 60)
+  check("reply to another key is refused", nope, nil)
+end
+reset()
+
 -- The root only signs what the admin reviewed.
 reset()
 do

@@ -6,6 +6,7 @@ local db = require("rootdb")
 local net = require("net")
 
 net.listen(net.ROOT_PORT)
+if db.ready() then db.ensureZone() end
 
 local function serving()
     return db.ready() and db.config().online
@@ -24,8 +25,14 @@ local function requests()
     while true do
         local msg = net.receive(net.ROOT_PORT)
         local payload = msg and msg.payload
-        if msg and serving() and type(payload) == "table" and payload.op == "certificate" then
-            net.reply(msg, db.handle(payload.name, msg.peer.key, msg.from))
+        if msg and serving() and type(payload) == "table" then
+            if payload.op == "certificate" then
+                net.reply(msg, db.handle(payload.name, msg.peer.key, msg.from))
+            elseif payload.op == "zone" then
+                net.reply(msg, db.config().zone)
+            elseif payload.op == "resolve" then
+                net.reply(msg, db.resolve(payload.name))
+            end
         end
     end
 end

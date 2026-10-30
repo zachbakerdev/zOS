@@ -10,6 +10,11 @@ pinned by computer id the first time it's seen, and is refused if its key ever c
 ids can be faked, so a certificate only counts for its own id: otherwise any certified computer
 could claim another's id and replace its pinned key.
 
+A hostname is a certificate name of the form "<label>.<tld>", like zmail.root-a. Each root owns
+one top-level domain, set in a zone record it signs, because its display name can change and
+computers keep showing the one they first saw. Root servers only sign hostnames in their own TLD,
+and anyone looking one up checks it came from the root that holds that TLD.
+
 Keys in stored and transmitted tables are hex; the crypto functions take raw bytes. ]]
 
 local crypto = require("crypto")
@@ -24,6 +29,7 @@ local ROOTS = fs.combine(trust.DIR, "roots")
 local CERTS = fs.combine(trust.DIR, "certs")
 
 local MAX_NAME = 24
+local MAX_TLD = 16
 local MAX_CERTS = 4 -- most certificates a peer can show, since each costs a signature check
 
 trust.fingerprint = crypto.fingerprint
@@ -35,6 +41,34 @@ function trust.validName(name)
         return false, "Names are 1-" .. MAX_NAME .. " letters, digits, spaces, ., - or _."
     end
     return true
+end
+
+local function validLabel(text)
+    return type(text) == "string" and text:match("^[a-z0-9][a-z0-9%-]*$") ~= nil
+end
+
+function trust.validTld(tld)
+    if not validLabel(tld) or #tld > MAX_TLD then
+        return false, "Top-level domains are 1-" .. MAX_TLD .. " lowercase letters, digits or -, starting with a " ..
+            "letter or digit."
+    end
+    return true
+end
+
+-- A top-level domain to suggest for a root server called `name`.
+function trust.tldFromName(name)
+    local tld = name:lower():gsub("[^a-z0-9]+", "-"):gsub("^%-+", ""):sub(1, MAX_TLD):gsub("%-+$", "")
+    return tld ~= "" and tld or "root"
+end
+
+-- Split a hostname. Returns label and tld, or nil and a reason.
+function trust.parseHost(host)
+    local label, tld = (type(host) == "string" and host or ""):match("^([^.]+)%.([^.]+)$")
+    if not validLabel(label) or not trust.validTld(tld) or #host > MAX_NAME then
+        return nil, "Hostnames look like zmail.root-a: up to " .. MAX_NAME .. " lowercase letters, digits or -, " ..
+            "with one dot before the root server's top-level domain."
+    end
+    return label, tld
 end
 
 function trust.defaultName()
@@ -91,6 +125,14 @@ function trust.addRoot(key, name, host)
     util.writeTable(ROOTS, roots)
 end
 
+-- Remember a top-level domain that this root's signature has been checked for.
+function trust.setRootTld(key, tld)
+    local roots = loadRoots()
+    if not roots[key] then return end
+    roots[key].tld = tld
+    util.writeTable(ROOTS, roots)
+end
+
 -- Removing a root also removes the certificates it issued to this computer.
 function trust.removeRoot(key)
     local roots = loadRoots()
@@ -115,6 +157,10 @@ end
 
 local function advertBody(advert)
     return table.concat({ "zos-root-1", advert.name, advert.key, whole(advert.host) }, "\n")
+end
+
+local function zoneBody(tld, key)
+    return table.concat({ "zos-zone-1", tld, key }, "\n")
 end
 
 local function wellFormed(cert)
@@ -176,6 +222,21 @@ function trust.checkAdvert(advert)
     return crypto.verify(crypto.fromHex(advert.key), advertBody(advert), crypto.fromHex(advert.sig))
 end
 
+-- A root server's claim to a top-level domain, kept apart from its advert so that roots computers
+-- already trust can be asked for one.
+function trust.signZone(rootSeed, rootKey, tld)
+    local key = crypto.toHex(rootKey)
+    return { tld = tld, key = key, sig = crypto.toHex(crypto.sign(rootSeed, zoneBody(tld, key), rootKey)) }
+end
+
+-- Is this the zone of the root with this key (hex)?
+function trust.checkZone(zone, key)
+    if type(zone) ~= "table" or zone.key ~= key or not trust.validTld(zone.tld) or not crypto.isHex(zone.sig, 128) then
+        return false
+    end
+    return crypto.verify(crypto.fromHex(key), zoneBody(zone.tld, key), crypto.fromHex(zone.sig))
+end
+
 ------------------------------------------------------------------------------
 -- This computer's certificates, one per root
 ------------------------------------------------------------------------------
@@ -216,6 +277,15 @@ end
 -- during a session, so this is worked out again for each message. `key` is hex.
 function trust.describe(id, key, certs)
     local cert = trust.verifiedBy(id, key, certs)
+    local names = {}
+    if type(certs) == "table" then
+        for i = 1, math.min(#certs, MAX_CERTS) do
+            local other = certs[i]
+            if type(other) == "table" and other.id == id and trust.root(other.root) and trust.checkCert(other, key) then
+                names[other.root] = other.name
+            end
+        end
+    end
     return {
         id = id,
         key = key,
@@ -223,6 +293,7 @@ function trust.describe(id, key, certs)
         verified = cert ~= nil,
         name = cert and cert.name or nil,
         root = cert and cert.root or nil,
+        names = names, -- root key -> name, for every certificate it showed
     }
 end
 

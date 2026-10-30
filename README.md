@@ -183,7 +183,8 @@ README with the details.
 
 | folder                           | app            | what it does |
 |----------------------------------|----------------|--------------|
-| [`apps/zos-mail`](apps/zos-mail)   | **Mail**       | End-to-end encrypted messages between users on this or other zOS computers |
+| [`apps/mail`](apps/mail)         | **Mail**       | Read and send mail through a mail server, see [Mail](#mail) |
+| [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/zos-notes`](apps/zos-notes) | **Notes**      | Personal notes, saved in `/home/<user>/notes/` |
 | [`apps/zos-calc`](apps/zos-calc)   | **Calculator** | Evaluates expressions like `sqrt(2) * pi`, with variables (`x = 5`) and `ans` |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
@@ -323,7 +324,7 @@ local reply, err = net.request(12, 5000, "ping", { timeout = 5 })
 | `port`      | the port it arrived on |
 | `from`      | the sender's computer id, for replying. Use `peer` to decide whether to believe it |
 | `side`      | the modem it arrived on |
-| `peer`      | `{ id, key, fingerprint, verified, name, root }`. `name` is only set if `verified` |
+| `peer`      | `{ id, key, fingerprint, verified, name, root, names }`. `name` is only set if `verified`, and `names` has every name it holds, by root key |
 
 A port is the modem channel. Each computer also keeps one channel open for itself
 (`30000 + id % 30000`) for handshakes and replies, which accepts nothing but answers to its own
@@ -367,6 +368,71 @@ everyone else who pinned the old one, until an admin there forgets it under **Tr
 Revoking one in the app stops it renewing and frees the name, but the certificate
 keeps working until it expires, because computers don't check back with the root server. Keep the
 lifetime short if that matters to you.
+
+### Hostnames
+
+A hostname is a name a root server gives out under its own top-level domain, like `zmail.root-a`.
+It's an ordinary certificate name, so it's requested, approved and renewed in the same way.
+
+Each root server has one top-level domain, which it asks for at setup and signs with its root key.
+It's separate from the server's name, so renaming the server doesn't move anyone's hostname. It can
+only change under **Top-level domain** in the Root Server app while no hostname is using it. Root
+servers set up before zOS 2.1 get one made from their name. A root server only signs hostnames in
+its own top-level domain, and names without a dot work as they always have.
+
+```lua
+local found, err = net.resolve("zmail.root-a")                 -- { host, id, key, root }
+local reply, err = net.requestHost("zmail.root-a", 5000, "hi") -- net.request, by hostname
+net.isHost(msg.peer, "zmail.root-a")                           -- did this message come from it?
+```
+
+Looking up a hostname means finding which trusted root owns the top-level domain, then asking that
+root for the certificate. Both answers are signed by the root, so the computer it runs on can only
+make a lookup fail, not change the answer. `requestHost` then only sends to a computer holding that
+name from that root, so a second root you trust can't answer for another's hostnames even if it
+signs the same name. If two trusted roots claim one top-level domain, lookups in it are refused.
+
+A hostname is taken like any certificate: a computer holds one per root, so a computer already
+certified under another name has to have that entry revoked and forgotten in the Root Server app
+first. To reach a hostname, a computer has to trust its root server, and the root server has to be
+in range. A computer can't reach its own hostname, because modems can't send to their own computer.
+
+### Mail
+
+The Mail Server app (port 4202) holds mailboxes for accounts, and the Mail app reads and sends
+through it from any other computer. An address is `account@hostname`, like
+`alice@zmail.root-a`.
+
+1. **Trust a root server** on the mail server, in **Settings → Network → Root servers**. See
+   [Root servers](#root-servers).
+2. **Get a hostname.** Open Mail Server, which asks for a name and adds the root's top-level domain.
+   The root server's admin compares fingerprints and approves it under **Requests**.
+3. **Make accounts.** Add them under **Accounts**, or leave **New accounts** open so that people
+   can use **Create an account** in Mail.
+4. **Sign in.** On another computer that trusts the same root server, install Mail and sign in with
+   the full address.
+
+Mail for another server is queued and sent by the service. If that server can't be reached, it tries
+again after 1 minute, doubling up to every hour, for 3 days, and the queue survives a reboot. Mail
+that can't be delivered comes back to the sender from `postmaster@<hostname>`. **Waiting to send**
+in Mail Server shows what's queued and why. To exchange mail, both servers have to trust both
+roots, because each one looks the other up and checks that a message comes from the server named
+in its address. Nothing is relayed through a third server.
+
+- **Mail is encrypted on its way, not on the server.** `net` protects it between computers, but it's
+  stored as ordinary files in `/etc/zos/mail-server/`, so anyone who can log in to the mail server
+  can read it. Mail isn't end-to-end encrypted.
+- **A server vouches for its own addresses.** The hostname in a sender's address is proven. The
+  account name in front of it is only as honest as that server.
+- **Passwords only travel when signing in,** and are stored salted and hashed. Mail keeps a token
+  instead, sealed with your zOS user's key, for 30 days. Changing a password signs out every other
+  computer. Five wrong passwords lock an account for a minute.
+- **Limits.** 8 KB per message, 8 recipients, 64 messages per mailbox, 64 accounts and 32 queued
+  deliveries. A full mailbox makes other servers keep trying.
+
+Revoking a hostname stops lookups of it straight away. A computer that holds the certificate can
+still prove the name to anyone it reaches until the certificate expires, as with any revoked
+certificate (see [Root servers](#root-servers)).
 
 ### File Share
 
@@ -456,8 +522,8 @@ tools/
   make_disk.py            packs disk/ into dist/zos-disk.lua, which writes the setup disk
   make_app_disks.py       packs each app in apps/ into dist/<app>-disk.lua, which writes an app disk
   make_update.py          packs the update that computers download
-apps/                     optional apps: root-server, fileshare, zos-mail, zos-notes, zos-calc
-tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua, test_fileshare.lua, test_files.lua, test_update.lua
+apps/                     optional apps: root-server, fileshare, mail, mail-server
+tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua, test_fileshare.lua, test_mail.lua, test_files.lua, test_update.lua
 disk/                     the setup floppy
   startup.lua             starts setup when a computer without zOS boots from the disk
   install.lua             the setup program

@@ -1,7 +1,8 @@
 {
     name = "Root Server",
     description = "Vouch for other computers by signing their keys",
-    version = "1.0",
+    version = "1.1",
+    minZos = "2.1",
     author = "zOS",
     priority = 80,
 }

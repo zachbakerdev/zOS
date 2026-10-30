@@ -2,7 +2,7 @@ local util = require("util")
 
 local system = {}
 
-system.VERSION = "2.0.0"
+system.VERSION = "2.1.0"
 
 local CONFIG = "/etc/zos/config"
 local LOG = "/etc/zos/system.log"

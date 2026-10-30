@@ -6,15 +6,18 @@
   net.send(id, port, payload, { verified = true, expect = "name" })   -- true, or nil and a reason
   net.request(id, port, payload, { timeout = 5, ... })                -- reply message, or nil and a reason
   net.reply(msg, payload)
+  net.resolve("zmail.root-a")                                         -- { host, id, key, root }, or nil and a reason
+  net.requestHost("zmail.root-a", port, payload, { timeout = 5 })     -- net.request, by hostname
 
 A message that decrypts and authenticates goes into its port's inbox and queues a `net_message`
 event, each carrying one table:
 
-  { port, payload, from = id, id, side, peer = { id, key, fingerprint, verified, name, root } }
+  { port, payload, from = id, id, side, peer = { id, key, fingerprint, verified, name, root, names } }
 
 Nothing else does: packets that fail any check are dropped silently. `verified` means the peer
 has a current certificate for its computer id from a root server you trust, and `peer.name` is
-the name on it. `expect` also requires that name. See trust.lua for what happens without a
+the name on it. `peer.names` has every name it holds, by root key. `expect` requires one of them,
+and `root` requires that it comes from this root. See trust.lua for what happens without a
 certificate.
 
 The event reaches every program on the computer and is gone if nobody is waiting at that moment,
@@ -292,12 +295,23 @@ local function finish(job, ok, err)
     os.queueEvent(RESULT, job.id, ok, err)
 end
 
+local function holdsName(peer, name, root)
+    if root then return peer.names[root] == name end
+    for _, held in pairs(peer.names) do
+        if held == name then return true end
+    end
+    return false
+end
+
 local function refusal(peer, job)
     if (job.verified or job.expect) and not peer.verified then
         return "computer " .. peer.id .. " has no certificate from a trusted root"
     end
-    if job.expect and peer.name ~= job.expect then
+    if job.expect and not holdsName(peer, job.expect, job.root) then
         return "computer " .. peer.id .. " is '" .. tostring(peer.name) .. "', not '" .. job.expect .. "'"
+    end
+    if job.key and peer.key ~= job.key then
+        return "computer " .. peer.id .. " has changed key"
     end
 end
 
@@ -769,7 +783,7 @@ local function newJob(to, port, payload, opts)
 
     return {
         id = jobCounter, msgId = msgId, to = to, port = port, body = body,
-        verified = opts.verified == true, expect = opts.expect,
+        verified = opts.verified == true, expect = opts.expect, root = opts.root, key = opts.key,
     }
 end
 
@@ -815,10 +829,12 @@ function net.request(to, port, payload, opts)
     return nil, "computer " .. to .. " didn't reply"
 end
 
--- Answer a message that came from net.request. Fails if the sender isn't waiting for one.
+-- Answer a message that came from net.request. Fails if the sender isn't waiting for one. Computer
+-- ids can be claimed by anyone, so the answer only goes to the key that asked.
 function net.reply(msg, payload, opts)
     opts = opts or {}
     opts.re = msg.id
+    opts.key = msg.peer.key
     return net.send(msg.from, homeChannel(msg.from), payload, opts)
 end
 
@@ -898,6 +914,79 @@ function net.requestCertificate(root, name)
         return answer.status
     end
     return nil, tostring(answer.message or "the root server refused")
+end
+
+------------------------------------------------------------------------------
+-- Hostnames
+------------------------------------------------------------------------------
+
+-- Ask a trusted root server for its top-level domain. The answer is signed with the root's key, so
+-- the computer it comes from doesn't have to be trusted. Returns the tld, or nil and a reason.
+function net.tldOf(root)
+    local reply, err = net.request(root.host, net.ROOT_PORT, { op = "zone" }, { timeout = 10 })
+    if not reply then return nil, err end
+    if not trust.checkZone(reply.payload, root.key) then return nil, "the root server sent a bad zone" end
+    trust.setRootTld(root.key, reply.payload.tld)
+    return reply.payload.tld
+end
+
+local function rootsWithTld(tld)
+    local matches = {}
+    for _, root in ipairs(trust.roots()) do
+        if root.tld == tld then matches[#matches + 1] = root end
+    end
+    return matches
+end
+
+-- The trusted root that owns a top-level domain, or nil and a reason. Asks every trusted root if
+-- none is known to, because it may be new or have moved. Two roots could claim the same one, and
+-- picking either would let one answer for the other's hosts, so that's refused.
+function net.rootForTld(tld)
+    local matches = rootsWithTld(tld)
+    if #matches == 0 then
+        for _, root in ipairs(trust.roots()) do net.tldOf(root) end
+        matches = rootsWithTld(tld)
+    end
+    if #matches == 0 then return nil, "no trusted root server has the top-level domain ." .. tld end
+    if #matches > 1 then return nil, "two trusted root servers claim the top-level domain ." .. tld end
+    return matches[1]
+end
+
+-- Look up a hostname. Returns { host, id, key, root }, or nil and a reason. The certificate is
+-- checked against the root's key, so a lying computer can only make a lookup fail.
+function net.resolve(host)
+    local label, tld = trust.parseHost(host)
+    if not label then return nil, "'" .. tostring(host) .. "' isn't a hostname" end
+    local root, why = net.rootForTld(tld)
+    if not root then return nil, why end
+    local reply, err = net.request(root.host, net.ROOT_PORT, { op = "resolve", name = host }, { timeout = 10 })
+    if not reply then return nil, err end
+    local cert = type(reply.payload) == "table" and reply.payload.cert
+    if not cert then return nil, "there's no host called " .. host end
+    if not trust.checkCert(cert, type(cert) == "table" and cert.key) or cert.root ~= root.key or cert.name ~= host then
+        return nil, "the root server sent a bad certificate"
+    end
+    return { host = host, id = cert.id, key = cert.key, root = root.key }
+end
+
+-- Is this peer, from a received message, the holder of this hostname?
+function net.isHost(peer, host)
+    local label, tld = trust.parseHost(host)
+    local root = label and net.rootForTld(tld)
+    return root ~= nil and peer.names[root.key] == host
+end
+
+-- net.request, to whoever holds a hostname. Refuses to send to anyone else.
+function net.requestHost(host, port, payload, opts)
+    local found, err = net.resolve(host)
+    if not found then return nil, err end
+    if found.id == ID then return nil, host .. " is this computer, and modems can't send to their own computer" end
+    local reply, why = net.request(found.id, port, payload, {
+        timeout = opts and opts.timeout, expect = host, root = found.root,
+    })
+    if not reply then return nil, why end
+    if reply.peer.names[found.root] ~= host then return nil, "the answer didn't come from " .. host end
+    return reply
 end
 
 return net

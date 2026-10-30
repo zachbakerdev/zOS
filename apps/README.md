@@ -33,7 +33,7 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
   in. Use `os.pullEventRaw`. Anything it draws goes to a hidden window. If it crashes, it stops
   and the error goes to `/etc/zos/system.log`.
 - `require` finds the app's own modules first (`require("helper")` loads `helper.lua` from the
-  app folder), then the zOS libraries (`ui`, `auth`, `keys`, `crypto`, `system`, `apps`, ...).
+  app folder), then the zOS libraries (`ui`, `auth`, `keys`, `crypto`, `net`, `trust`, `system`, `apps`, ...).
 - Installing a new version replaces the app's folder, so keep data somewhere else, such as
   `/home/<user>/` or `/etc/zos/<id>/`.
 

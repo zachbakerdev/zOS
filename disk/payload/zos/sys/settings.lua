@@ -1,5 +1,5 @@
--- zOS settings: your password, encryption keys, the computer label and, for admins,
--- users and secure boot.
+-- zOS settings: your password, encryption keys, the network, the computer label and, for
+-- admins, users and secure boot.
 
 local session = ...
 local ui = require("ui")
@@ -7,6 +7,8 @@ local auth = require("auth")
 local keys = require("keys")
 local crypto = require("crypto")
 local system = require("system")
+local net = require("net")
+local trust = require("trust")
 
 local TITLE = "Settings"
 local me = session.user
@@ -187,6 +189,206 @@ local function encryptionKeys()
     end
 end
 
+-- A root server's name and fingerprint on one line, if the screen is wide enough for both.
+local function rootLabel(root)
+    local w = term.getSize()
+    local line = root.name .. "  " .. root.fingerprint
+    return #line + 4 <= w and line or root.name
+end
+
+local function daysLeft(cert)
+    return math.max(0, math.ceil((cert.expires - os.epoch("utc")) / 86400000))
+end
+
+-- Polls until the root server's admin has answered. Backspace leaves the request with them, and
+-- asking again later picks up the answer.
+local function waitForCertificate(root, name)
+    while true do
+        ui.screen(TITLE .. " - Certificate")
+        ui.text("Asking " .. root.name .. " to sign this computer's key as '" .. name .. "'.")
+        ui.text("")
+        ui.text("Your fingerprint:", ui.theme.dim)
+        ui.text(trust.fingerprint(select(2, trust.identity())), ui.theme.accent)
+        ui.text("")
+        local status, err = net.requestCertificate(root, name)
+        if status == "issued" then
+            system.log(me .. " got a certificate as " .. name .. " from " .. root.name)
+            return ui.message(TITLE, "Certificate installed. Other computers that trust " .. root.name ..
+                " can now verify this computer as '" .. name .. "'.", ui.theme.good)
+        elseif status == "denied" then
+            return ui.message(TITLE, root.name .. " refused the request.", ui.theme.bad)
+        elseif not status then
+            return ui.message(TITLE, "Couldn't get a certificate:\n\n" .. tostring(err), ui.theme.bad)
+        end
+
+        ui.text("Waiting for the root server's administrator to approve it. They should compare " ..
+            "this fingerprint with the one on their screen. Backspace stops waiting.", ui.theme.dim)
+        local timer = os.startTimer(5)
+        while true do
+            local e, a = os.pullEventRaw()
+            if e == "timer" and a == timer then break end
+            if e == "key" and a == _G.keys.backspace then return end
+        end
+    end
+end
+
+local function requestCertificate(root)
+    local redraw = function()
+        ui.screen(TITLE .. " - Certificate")
+        ui.text("Choose the name other computers will know this computer by. The root server's " ..
+            "administrator has to approve it.", ui.theme.dim)
+        ui.text("")
+    end
+    local err
+    while true do
+        redraw()
+        if err then ui.text(err, ui.theme.bad) ui.text("") end
+        local name = ui.input("Name", nil, trust.defaultName())
+        if name == "" then return end
+        local ok, why = trust.validName(name)
+        if ok then return waitForCertificate(root, name) end
+        err = why
+    end
+end
+
+local function manageRoot(root)
+    while true do
+        local cert = trust.cert(root.key)
+        local items = {
+            { label = "Details", hint = "Name, fingerprint and computer" },
+            { label = cert and "Renew certificate" or "Request a certificate",
+              hint = "Have this root server vouch for this computer" },
+            { label = "Remove root server", hint = "Stop trusting it", fg = ui.theme.bad },
+            { label = "Back", fg = ui.theme.dim },
+        }
+        local choice = ui.menu({ title = TITLE .. " - " .. root.name, items = items, back = true })
+        if choice == 1 then
+            ui.pager(TITLE .. " - " .. root.name, "Name: " .. root.name .. "\n\nFingerprint:\n" .. root.fingerprint ..
+                "\n\nPublic key:\n" .. root.key .. "\n\nComputer: " .. root.host ..
+                "\n\nThis computer's certificate: " ..
+                (cert and (cert.name .. ", " .. daysLeft(cert) .. " days left") or "none"))
+        elseif choice == 2 then
+            if not session.admin then
+                ui.message(TITLE, "Only administrators can request certificates.", ui.theme.bad)
+            else
+                requestCertificate(root)
+            end
+        elseif choice == 3 then
+            if not session.admin then
+                ui.message(TITLE, "Only administrators can remove root servers.", ui.theme.bad)
+            else
+                ui.screen(TITLE)
+                ui.text("Stop trusting " .. root.name .. "? Computers it vouched for will no longer be " ..
+                    "verified here, and this computer's certificate from it will be deleted.", ui.theme.accent)
+                ui.text("")
+                if ui.confirm("Remove it?") then
+                    trust.removeRoot(root.key)
+                    system.log(me .. " removed root server " .. root.name .. " " .. root.fingerprint)
+                    return
+                end
+            end
+        else
+            return
+        end
+    end
+end
+
+local function addRoot()
+    ui.screen(TITLE .. " - Add root server")
+    if #net.modems() == 0 then
+        return ui.message(TITLE, "This computer has no modem. Attach one and try again.", ui.theme.bad)
+    end
+    ui.text("Looking for root servers on port " .. net.ROOT_PORT .. "...", ui.theme.dim)
+    local found, err = net.findRoots(3)
+    if not found then return ui.message(TITLE, err, ui.theme.bad) end
+    if #found == 0 then
+        return ui.message(TITLE, "No root servers answered. Check that one is running, online and in range.",
+            ui.theme.bad)
+    end
+
+    local items = {}
+    for _, root in ipairs(found) do
+        local trusted = trust.root(root.key) ~= nil
+        items[#items + 1] = { label = rootLabel(root) .. (trusted and "  [added]" or ""),
+            hint = root.fingerprint, fg = trusted and ui.theme.dim or nil }
+    end
+    items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+
+    local choice = ui.menu({ title = TITLE .. " - Add root server", items = items, back = true })
+    local root = choice and found[choice]
+    if not root then return end
+    if trust.root(root.key) then
+        return ui.message(TITLE, root.name .. " is already a trusted root server.", ui.theme.dim)
+    end
+
+    ui.screen(TITLE .. " - Add root server")
+    ui.text(root.name, ui.theme.accent)
+    ui.text("Fingerprint: " .. root.fingerprint)
+    ui.text("Computer: " .. root.host, ui.theme.dim)
+    ui.text("")
+    ui.text("Anyone can announce a root server and pick any name. Compare this fingerprint with " ..
+        "the one on the root server's own screen. Every computer it signs will be verified here.",
+        ui.theme.bad)
+    ui.text("")
+    if not ui.confirm("Trust this root server?") then return end
+    trust.addRoot(root.key, root.name, root.host)
+    system.log(me .. " added root server " .. root.name .. " " .. root.fingerprint)
+    ui.message(TITLE, "Added " .. root.name .. ".", ui.theme.good)
+end
+
+local function rootServers()
+    while true do
+        local list = trust.roots()
+        local items = {}
+        for _, root in ipairs(list) do
+            items[#items + 1] = { label = rootLabel(root), hint = root.fingerprint }
+        end
+        items[#items + 1] = { label = "Add root server...", hint = "Find root servers on the network" }
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+
+        local choice = ui.menu({ title = TITLE .. " - Root servers", items = items, back = true })
+        if choice == nil or choice == #items then return end
+        if list[choice] then
+            manageRoot(list[choice])
+        elseif not session.admin then
+            ui.message(TITLE, "Only administrators can add root servers.", ui.theme.bad)
+        else
+            addRoot()
+        end
+    end
+end
+
+local function networkIdentity()
+    local _, public = trust.identity()
+    local lines = { "Computer: " .. os.getComputerID(), "", "Fingerprint:", trust.fingerprint(public), "",
+        "Public key:", crypto.toHex(public), "", "Certificates:" }
+    local certs = trust.certs()
+    for _, cert in ipairs(certs) do
+        local root = trust.root(cert.root)
+        lines[#lines + 1] = cert.name .. " from " .. (root and root.name or "an untrusted root") ..
+            ", " .. daysLeft(cert) .. " days left"
+    end
+    if #certs == 0 then lines[#lines + 1] = "None. Request one from a root server." end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Modems: " .. (#net.modems() > 0 and table.concat(net.modems(), ", ") or "none")
+    ui.pager(TITLE .. " - This computer", table.concat(lines, "\n"))
+end
+
+local function network()
+    local selected = 1
+    while true do
+        local items = {
+            { label = "Root servers (" .. #trust.roots() .. ")", action = rootServers,
+              hint = "Servers that vouch for other computers" },
+            { label = "This computer", action = networkIdentity, hint = "Fingerprint and certificates" },
+            { label = "Back", fg = ui.theme.dim },
+        }
+        selected = ui.menu({ title = TITLE .. " - Network", items = items, selected = selected, back = true })
+        if selected == nil or not items[selected].action then return end
+        items[selected].action()
+    end
+end
+
 local function label()
     ui.screen(TITLE)
     ui.text("Current label: " .. (os.getComputerLabel() or "(none)"), ui.theme.dim)
@@ -227,6 +429,7 @@ while true do
     local items = {
         { label = "Change my password", action = changePassword },
         { label = "Encryption keys", action = encryptionKeys, hint = "View or replace your key, trusted keys" },
+        { label = "Network", action = network, hint = "Root servers, fingerprint, certificates" },
         { label = "Computer label", action = label, hint = "Name shown on the login screen" },
     }
     if auth.isAdmin(me) then

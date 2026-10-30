@@ -7,6 +7,8 @@ computers.
 - **Logins.** Passwords are salted and hashed, and repeated failed attempts lock the login.
 - **Desktop.** An app launcher with built-in apps and an app manager for installing more.
 - **Setup disk.** Installs or upgrades zOS and walks you through creating an admin account.
+- **Networking.** Encrypted, authenticated messages between computers, with root servers that
+  vouch for who a computer is.
 
 ## Quick start
 
@@ -23,8 +25,8 @@ The `disk/` folder is the contents of the setup floppy. You can get it onto a fl
 
 ### From Pastebin
 
-`tools/make_disk.py` packs `disk/` into a single Lua program, `dist/zos-disk.lua` (about
-60 KB), that writes the setup disk when you run it in game. You don't need access to the world
+`tools/make_disk.py` packs `disk/` into a single Lua program, `dist/zos-disk.lua`, that writes
+the setup disk when you run it in game. You don't need access to the world
 save.
 
 ```
@@ -59,6 +61,8 @@ pastebin run <code> some/folder             # a folder instead of a floppy
 - Lua files are minified with [LuaSrcDiet](https://github.com/jirutka/luasrcdiet), which also
   checks that each one compiles to the same bytecode as before. Line numbers in error messages
   won't match the source, so use `--no-minify` when debugging.
+- A floppy holds 125 KB, which the setup files only fit into minified. With `--no-minify`, write
+  to a folder instead.
 - Files are stored as escaped strings, one per line, so Pastebin's line-ending and whitespace
   changes can't alter them.
 - After changing zOS, run the script again and upload the new version.
@@ -111,7 +115,7 @@ If zOS is already installed, setup offers two options:
 | **Files**       | Browse folders; edit, run, copy, move and delete files |
 | **Shell**       | The CraftOS shell (`exit` returns to the desktop) |
 | **App Manager** | Install and remove apps |
-| **Settings**    | Change your password, set the computer label; admins also manage users and secure boot |
+| **Settings**    | Change your password, set the computer label, view the network; admins also manage users, root servers and secure boot |
 | **About**       | System information |
 
 ### Secure boot
@@ -139,6 +143,7 @@ README with the details.
 | [`apps/zos-mail`](apps/zos-mail)   | **Mail**       | End-to-end encrypted messages between users on this or other zOS computers |
 | [`apps/zos-notes`](apps/zos-notes) | **Notes**      | Personal notes, saved in `/home/<user>/notes/` |
 | [`apps/zos-calc`](apps/zos-calc)   | **Calculator** | Evaluates expressions like `sqrt(2) * pi`, with variables (`x = 5`) and `ans` |
+| [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 
 Upgrading from zOS 1.2 or earlier removes the old built-in Mail, Notes and Calculator apps but
 keeps their data (`/etc/zos/mail/`, `/home/<user>/notes/`). Install the apps again to get them
@@ -224,6 +229,108 @@ The service gets its app's folder as `...`. Services must not draw to the screen
 `os.pullEventRaw`. If a service crashes, it stops and the error goes to `/etc/zos/system.log`.
 Nothing else is affected.
 
+## Networking
+
+`require("net")` gives apps encrypted messages over modems. There's nothing to set up: every
+computer has its own key, and the key exchange happens by itself the first time two computers
+talk.
+
+```lua
+local net = require("net")
+
+-- Receive: only messages that decrypt and authenticate get through.
+net.listen(5000)                                -- every modem
+net.listen(5000, { modem = "top" })             -- or one modem
+net.listen(5000, { verified = true })           -- only computers a trusted root vouches for
+
+while true do
+    local msg = net.receive(5000)               -- waits; net.receive(5000, 10) gives up after 10s
+    if msg then
+        print(msg.from, msg.payload)
+        net.reply(msg, "got it")                -- if it came from net.request
+    end
+end
+```
+
+Each message also queues a `net_message` event (`net.EVENT`), which suits programs already
+waiting on other events. The event goes to every program on the computer and is gone if nobody is
+waiting for it at that moment, for example during a `net.reply`, so check `msg.port`, and use
+`net.receive` in servers: it holds up to 32 messages per port until you ask for them.
+
+```lua
+-- Send: returns true once the other computer has decrypted the message.
+local ok, err = net.send(12, 5000, { any = "table" })
+local ok, err = net.send(12, 5000, "hi", { verified = true })       -- it must have a certificate
+local ok, err = net.send(12, 5000, "hi", { expect = "bank" })       -- for exactly this name
+
+-- Or wait for an answer.
+local reply, err = net.request(12, 5000, "ping", { timeout = 5 })
+```
+
+| `msg` field | contents |
+|-------------|----------|
+| `payload`   | what was sent: anything except functions, up to 32 KB |
+| `port`      | the port it arrived on |
+| `from`      | the sender's computer id, for replying. Use `peer` to decide whether to believe it |
+| `side`      | the modem it arrived on |
+| `peer`      | `{ id, key, fingerprint, verified, name, root }`. `name` is only set if `verified` |
+
+A port is the modem channel. Each computer also keeps one channel open for itself
+(`30000 + id % 30000`) for handshakes and replies, which accepts nothing but answers to its own
+requests. `net.close(port)` stops listening. A closed port doesn't answer at all, so a send to one
+fails with a timeout, and `net.send` can take around 20 seconds to give up.
+
+### Who you're talking to
+
+- **Verified.** The peer showed a current certificate, signed by a root server you trust, for
+  the key it proved it holds and the computer id it claims. `peer.name` is the name on the
+  certificate. This is checked for every message, so removing a root takes effect at once.
+- **Pinned.** Without such a certificate, the peer's key is remembered against its computer id the
+  first time it's seen, and it's refused if the key changes, unless the new key has a certificate
+  for that computer id. The traffic is encrypted, but
+  on first contact nothing shows who is on the other end, and computer ids can be faked. Use
+  `verified` or `expect` for anything that matters. Pinned keys are in **Settings → Encryption
+  keys → Trusted keys**, and forgetting one there lets that computer change key.
+
+### Root servers
+
+A root server is a computer whose key others have decided to trust. It signs a certificate
+saying "this key belongs to this name on this computer".
+
+1. **Set one up.** Install the Root Server app on a computer that only admins can log in to, open
+   it, and name the server. It announces itself on port 4200.
+2. **Trust it.** On each other computer, an admin opens **Settings → Network → Root servers → Add
+   root server...**. zOS asks every root server in range to identify itself and lists their names
+   and fingerprints. Anyone can announce a root server under any name, so compare the
+   fingerprint with the one in **This server** in the Root Server app before accepting.
+3. **Get a certificate.** Choose the server in that list, then **Request a certificate** and pick
+   a name. The screen waits while the root server's admin compares fingerprints (**Settings →
+   Network → This computer** shows yours) and approves it under **Requests**. If you stop waiting,
+   the request stays, and asking again picks up the answer.
+
+Certificates last 30 days unless the root server is set otherwise, and computers renew them by
+themselves in their last 7 days as long as the root server can be reached, checking shortly after
+each boot and then hourly. An expired certificate just means the computer stops being verified.
+Each name and each computer can hold one certificate on a root server at a time, so a reinstalled
+computer needs its old one revoked first. Its new key is also refused, by the root server and
+everyone else who pinned the old one, until an admin there forgets it under **Trusted keys**.
+Revoking one in the app stops it renewing and frees the name, but the certificate
+keeps working until it expires, because computers don't check back with the root server. Keep the
+lifetime short if that matters to you.
+
+### Protocol
+
+Each handshake uses new X25519 keys, and each side signs both of them with its Ed25519 identity
+key, so recorded traffic can't be decrypted later, even with the identity keys. Messages are
+encrypted with ChaCha20 and authenticated with HMAC-SHA256, which also covers the addresses, port
+and a sequence number, so a message can't be changed, redirected or replayed. New keys are made
+every hour. Messages are acknowledged and sent again once if there's no answer, starting a new
+session in case the other computer rebooted, and repeats are dropped.
+
+Signatures are slow in Lua, so the first message to a computer takes noticeably longer than the
+ones after it. The work happens in the background, so packets aren't lost in the meantime.
+
+## How it works
 ## How it works
 
 ### Boot
@@ -255,7 +362,7 @@ CraftOS bios -> shell -> /startup.lua -> /zos/boot.lua -> login -> desktop
 |--------------------|----------|
 | `/startup.lua`     | bootstrap |
 | `/zos/`            | the system (replaced on upgrade) |
-| `/etc/zos/`        | accounts, keys, config, log |
+| `/etc/zos/`        | accounts, keys, network identity, config, log |
 | `/home/<user>/`    | users' files |
 | `/apps/`           | installed apps |
 | `/zos-backup/`     | your old startup file, if you had one |
@@ -268,7 +375,8 @@ Upgrades only replace `/startup.lua` and `/zos/`.
 tools/
   make_disk.py            packs disk/ into dist/zos-disk.lua, which writes the setup disk
   make_app_disks.py       packs each app in apps/ into dist/<app>-disk.lua, which writes an app disk
-apps/                     optional apps: zos-mail, zos-notes, zos-calc
+apps/                     optional apps: root-server, zos-mail, zos-notes, zos-calc
+tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua
 disk/                     the setup floppy
   startup.lua             starts setup when a computer without zOS boots from the disk
   install.lua             the setup program
@@ -280,8 +388,10 @@ disk/                     the setup floppy
       lib/auth.lua        accounts and login throttling
       lib/apps.lua        app registry, install, remove, launch
       lib/ui.lua          terminal UI toolkit
-      lib/crypto.lua      X25519, ChaCha20, HMAC-SHA256, random numbers
+      lib/crypto.lua      X25519, Ed25519, ChaCha20, SHA-256/512, HMAC, random numbers
       lib/keys.lua        per-user key pairs, pinned keys
+      lib/trust.lua       the computer's identity, trusted root servers, certificates
+      lib/net.lua         encrypted messages over modems
       sys/login.lua       login screen
       sys/desktop.lua     app launcher
       bin/appman.lua      command-line app manager
@@ -295,6 +405,15 @@ dist/                     generated programs
   strangers out but don't separate the people who can log in. Any user can open the Shell and
   read or change any file. Only give accounts to people you trust. Data encrypted with a user's
   key is the exception: only that user's password can unlock it.
+- **Network keys aren't protected by a password.** Networking runs while nobody is logged in, so
+  a computer's identity key, and a root server's signing key, are stored unencrypted in
+  `/etc/zos/`. Anyone who can log in to a computer can take its identity, which is why a root
+  server should have only trusted admins.
+- **Randomness is limited.** CC has no secure random source, so keys are made from timing and
+  other hard-to-guess values. Setup mixes in your password before it creates the identity key.
+- **A flood can delay new connections.** Only a few unfinished handshakes are kept, so a computer
+  sending constant fake handshakes can hold up new sessions. Existing sessions keep working.
+  Anyone can also jam a channel, since modems have no way to stop them.
 - **The world files are always a way in.** Anyone with access to the world or server files can
   get around zOS.
 - **A broken install can't be fixed from a disk.** If `/zos` is damaged and recovery can't load,

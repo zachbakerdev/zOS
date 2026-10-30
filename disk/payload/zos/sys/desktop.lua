@@ -16,7 +16,7 @@ local function items()
         list[#list + 1] = { label = app.name, hint = app.description, app = app }
     end
     for _, item in ipairs({
-        { label = "Settings", hint = "Password, keys, users, secure boot and computer label", screen = "settings" },
+        { label = "Settings", hint = "Password, keys, users, network, secure boot and label", screen = "settings" },
         { label = "Log out", hint = "Return to the login screen", action = "logout", fg = ui.theme.dim },
         { label = "Reboot", hint = "Restart the computer", action = "reboot", fg = ui.theme.dim },
         { label = "Shut down", hint = "Turn the computer off", action = "shutdown", fg = ui.theme.dim },

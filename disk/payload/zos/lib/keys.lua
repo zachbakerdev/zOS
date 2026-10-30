@@ -4,6 +4,7 @@ local util = require("util")
 local keys = {}
 
 keys.DIR = "/etc/zos/keys"
+keys.NET_DIR = "/etc/zos/net" -- the computer's own identity and certificates, see trust.lua
 local KNOWN = "/etc/zos/known_keys"
 local ITERATIONS = 200
 
@@ -102,6 +103,9 @@ function keys.reset()
     end
     if fs.exists(KNOWN) then
         fs.delete(KNOWN)
+    end
+    if fs.exists(keys.NET_DIR) then
+        fs.delete(keys.NET_DIR)
     end
 end
 

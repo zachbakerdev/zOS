@@ -37,7 +37,12 @@ end
 local stages = {
     { "Applying boot policy", system.applyBootPolicy },
     { "Loading system libraries", function()
-        for _, name in ipairs({ "util", "crypto", "auth", "keys", "services", "apps" }) do require(name) end
+        for _, name in ipairs({ "util", "crypto", "auth", "keys", "services", "apps", "trust", "net" }) do require(name) end
+    end },
+    { "Starting networking", function()
+        -- Logging in matters more than the network, so a failure here mustn't stop the boot.
+        local ok, err = pcall(require("net").start)
+        if not ok then system.log("networking failed to start: " .. tostring(err)) end
     end },
     { "Starting app services", function() require("apps").startServices() end },
 }

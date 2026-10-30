@@ -111,6 +111,136 @@ end
 
 crypto.sha256 = sha256
 
+-- SHA512. 64-bit words are kept as two 32-bit halves, high then low.
+
+local K512 = {
+  0x428a2f98, 0xd728ae22, 0x71374491, 0x23ef65cd, 0xb5c0fbcf, 0xec4d3b2f, 0xe9b5dba5, 0x8189dbbc,
+  0x3956c25b, 0xf348b538, 0x59f111f1, 0xb605d019, 0x923f82a4, 0xaf194f9b, 0xab1c5ed5, 0xda6d8118,
+  0xd807aa98, 0xa3030242, 0x12835b01, 0x45706fbe, 0x243185be, 0x4ee4b28c, 0x550c7dc3, 0xd5ffb4e2,
+  0x72be5d74, 0xf27b896f, 0x80deb1fe, 0x3b1696b1, 0x9bdc06a7, 0x25c71235, 0xc19bf174, 0xcf692694,
+  0xe49b69c1, 0x9ef14ad2, 0xefbe4786, 0x384f25e3, 0x0fc19dc6, 0x8b8cd5b5, 0x240ca1cc, 0x77ac9c65,
+  0x2de92c6f, 0x592b0275, 0x4a7484aa, 0x6ea6e483, 0x5cb0a9dc, 0xbd41fbd4, 0x76f988da, 0x831153b5,
+  0x983e5152, 0xee66dfab, 0xa831c66d, 0x2db43210, 0xb00327c8, 0x98fb213f, 0xbf597fc7, 0xbeef0ee4,
+  0xc6e00bf3, 0x3da88fc2, 0xd5a79147, 0x930aa725, 0x06ca6351, 0xe003826f, 0x14292967, 0x0a0e6e70,
+  0x27b70a85, 0x46d22ffc, 0x2e1b2138, 0x5c26c926, 0x4d2c6dfc, 0x5ac42aed, 0x53380d13, 0x9d95b3df,
+  0x650a7354, 0x8baf63de, 0x766a0abb, 0x3c77b2a8, 0x81c2c92e, 0x47edaee6, 0x92722c85, 0x1482353b,
+  0xa2bfe8a1, 0x4cf10364, 0xa81a664b, 0xbc423001, 0xc24b8b70, 0xd0f89791, 0xc76c51a3, 0x0654be30,
+  0xd192e819, 0xd6ef5218, 0xd6990624, 0x5565a910, 0xf40e3585, 0x5771202a, 0x106aa070, 0x32bbd1b8,
+  0x19a4c116, 0xb8d2d0c8, 0x1e376c08, 0x5141ab53, 0x2748774c, 0xdf8eeb99, 0x34b0bcb5, 0xe19b48a8,
+  0x391c0cb3, 0xc5c95a63, 0x4ed8aa4a, 0xe3418acb, 0x5b9cca4f, 0x7763e373, 0x682e6ff3, 0xd6b2b8a3,
+  0x748f82ee, 0x5defb2fc, 0x78a5636f, 0x43172f60, 0x84c87814, 0xa1f0ab72, 0x8cc70208, 0x1a6439ec,
+  0x90befffa, 0x23631e28, 0xa4506ceb, 0xde82bde9, 0xbef9a3f7, 0xb2c67915, 0xc67178f2, 0xe372532b,
+  0xca273ece, 0xea26619c, 0xd186b8c7, 0x21c0c207, 0xeada7dd6, 0xcde0eb1e, 0xf57d4f7f, 0xee6ed178,
+  0x06f067aa, 0x72176fba, 0x0a637dc5, 0xa2c898a6, 0x113f9804, 0xbef90dae, 0x1b710b35, 0x131c471b,
+  0x28db77f5, 0x23047d84, 0x32caab7b, 0x40c72493, 0x3c9ebe0a, 0x15c9bebc, 0x431d67c4, 0x9c100d4c,
+  0x4cc5d4be, 0xcb3e42b6, 0x597f299c, 0xfc657e2a, 0x5fcb6fab, 0x3ad6faec, 0x6c44198c, 0x4a475817,
+}
+
+local function rotr64(h, l, n)
+  if n > 32 then
+    h, l = l, h
+    n = n - 32
+  end
+  return bit32.bor(bit32.rshift(h, n), bit32.lshift(l, 32 - n)), bit32.bor(bit32.rshift(l, n), bit32.lshift(h, 32 - n))
+end
+
+local function shr64(h, l, n)
+  return bit32.rshift(h, n), bit32.bor(bit32.rshift(l, n), bit32.lshift(h, 32 - n))
+end
+
+local function sha512Pad(msg)
+  local len = #msg
+  local zeroes = (111 - len) % 128
+  local bits = len * 8
+  local tail = {}
+  for i = 16, 1, -1 do
+    tail[i] = string.char(bits % 256)
+    bits = math.floor(bits / 256)
+  end
+  return msg .. "\128" .. string.rep("\0", zeroes) .. table.concat(tail)
+end
+
+local function sha512Block(msg, offset, H)
+  local wh, wl = {}, {}
+
+  for i = 1, 16 do
+    local p = offset + (i - 1) * 8
+    local a, b, c, d, e, f, g, h = msg:byte(p, p + 7)
+    wh[i] = a * 0x1000000 + b * 0x10000 + c * 0x100 + d
+    wl[i] = e * 0x1000000 + f * 0x10000 + g * 0x100 + h
+  end
+
+  for i = 17, 80 do
+    local h15, l15, h2, l2 = wh[i - 15], wl[i - 15], wh[i - 2], wl[i - 2]
+    local a1, a2 = rotr64(h15, l15, 1)
+    local b1, b2 = rotr64(h15, l15, 8)
+    local c1, c2 = shr64(h15, l15, 7)
+    local d1, d2 = rotr64(h2, l2, 19)
+    local e1, e2 = rotr64(h2, l2, 61)
+    local f1, f2 = shr64(h2, l2, 6)
+    local lo = wl[i - 16] + bit32.bxor(a2, b2, c2) + wl[i - 7] + bit32.bxor(d2, e2, f2)
+    local hi = wh[i - 16] + bit32.bxor(a1, b1, c1) + wh[i - 7] + bit32.bxor(d1, e1, f1) + math.floor(lo / MOD)
+    wh[i], wl[i] = hi % MOD, lo % MOD
+  end
+
+  local ah, al, bh, bl, ch, cl, dh, dl = H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8]
+  local eh, el, fh, fl, gh, gl, hh, hl = H[9], H[10], H[11], H[12], H[13], H[14], H[15], H[16]
+
+  for i = 1, 80 do
+    local a1, a2 = rotr64(eh, el, 14)
+    local b1, b2 = rotr64(eh, el, 18)
+    local c1, c2 = rotr64(eh, el, 41)
+    local chh = bit32.bxor(bit32.band(eh, fh), bit32.band(bit32.bnot(eh), gh))
+    local chl = bit32.bxor(bit32.band(el, fl), bit32.band(bit32.bnot(el), gl))
+    local lo1 = hl + bit32.bxor(a2, b2, c2) + chl + K512[2 * i] + wl[i]
+    local hi1 = (hh + bit32.bxor(a1, b1, c1) + chh + K512[2 * i - 1] + wh[i] + math.floor(lo1 / MOD)) % MOD
+    lo1 = lo1 % MOD
+
+    local d1, d2 = rotr64(ah, al, 28)
+    local e1, e2 = rotr64(ah, al, 34)
+    local f1, f2 = rotr64(ah, al, 39)
+    local majh = bit32.bxor(bit32.band(ah, bh), bit32.band(ah, ch), bit32.band(bh, ch))
+    local majl = bit32.bxor(bit32.band(al, bl), bit32.band(al, cl), bit32.band(bl, cl))
+    local lo2 = bit32.bxor(d2, e2, f2) + majl
+    local hi2 = bit32.bxor(d1, e1, f1) + majh
+
+    hh, hl, gh, gl, fh, fl = gh, gl, fh, fl, eh, el
+    local lo = dl + lo1
+    eh, el = (dh + hi1 + math.floor(lo / MOD)) % MOD, lo % MOD
+    dh, dl, ch, cl, bh, bl = ch, cl, bh, bl, ah, al
+    lo = lo1 + lo2
+    ah, al = (hi1 + hi2 + math.floor(lo / MOD)) % MOD, lo % MOD
+  end
+
+  local v = {ah, al, bh, bl, ch, cl, dh, dl, eh, el, fh, fl, gh, gl, hh, hl}
+  for i = 15, 1, -2 do
+    local lo = H[i + 1] + v[i + 1]
+    H[i] = (H[i] + v[i] + math.floor(lo / MOD)) % MOD
+    H[i + 1] = lo % MOD
+  end
+end
+
+function crypto.sha512(msg)
+  msg = sha512Pad(tostring(msg))
+
+  local H = {
+    0x6a09e667, 0xf3bcc908, 0xbb67ae85, 0x84caa73b, 0x3c6ef372, 0xfe94f82b, 0xa54ff53a, 0x5f1d36f1,
+    0x510e527f, 0xade682d1, 0x9b05688c, 0x2b3e6c1f, 0x1f83d9ab, 0xfb41bd6b, 0x5be0cd19, 0x137e2179,
+  }
+
+  for offset = 1, #msg, 128 do
+    sha512Block(msg, offset, H)
+  end
+
+  local out = {}
+
+  for i = 1, 16 do
+    out[i] = string.format("%08x", H[i])
+  end
+
+  return table.concat(out)
+end
+
 -- HMAC
 
 function crypto.hmac(key, msg)
@@ -399,6 +529,261 @@ end
 
 function crypto.clearCache()
   cache = {}
+end
+
+-- Ed25519 signatures (RFC 8032). Points are { X, Y, Z, T } in extended coordinates.
+
+local D = gf({0x78a3, 0x1359, 0x4dca, 0x75eb, 0xd8ab, 0x4141, 0x0a4d, 0x0070, 0xe898, 0x7779, 0x4079, 0x8cc7, 0xfe73, 0x2b6f, 0x6cee, 0x5203})
+local D2 = gf({0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0, 0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406})
+local BX = gf({0xd51a, 0x8f25, 0x2d60, 0xc956, 0xa7b2, 0x9525, 0xc760, 0x692c, 0xdc5c, 0xfdd6, 0xe231, 0xc0a4, 0x53fe, 0xcd6e, 0x36d3, 0x2169})
+local BY = gf({0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666})
+local SQRTM1 = gf({0xa0b0, 0x4a0e, 0x1b27, 0xc4ee, 0xe478, 0xad2f, 0x1806, 0x2f43, 0xd7a7, 0x3dfb, 0x0099, 0x2b4d, 0xdf0b, 0x4fc1, 0x2480, 0x2b83})
+
+-- The group order, least significant byte first, indexed from 0.
+local L = {[0] = 0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10}
+
+local function pointAdd(p, q)
+  local a, b, c, d, e, f, g, h, t = gf(), gf(), gf(), gf(), gf(), gf(), gf(), gf(), gf()
+  sub(a, p[2], p[1])
+  sub(t, q[2], q[1])
+  mul(a, a, t)
+  add(b, p[1], p[2])
+  add(t, q[1], q[2])
+  mul(b, b, t)
+  mul(c, p[4], q[4])
+  mul(c, c, D2)
+  mul(d, p[3], q[3])
+  add(d, d, d)
+  sub(e, b, a)
+  sub(f, d, c)
+  add(g, d, c)
+  add(h, b, a)
+  mul(p[1], e, f)
+  mul(p[2], h, g)
+  mul(p[3], g, f)
+  mul(p[4], e, h)
+end
+
+local function pointZero()
+  return {gf(), gf({1}), gf({1}), gf()}
+end
+
+local function pointBase()
+  local p = {gf(BX), gf(BY), gf({1}), gf()}
+  mul(p[4], BX, BY)
+  return p
+end
+
+local function parity(a)
+  return bit32.band(pack(a):byte(1), 1)
+end
+
+local function pointPack(p)
+  local zi, x, y = gf(), gf(), gf()
+  inv(zi, p[3])
+  mul(x, p[1], zi)
+  mul(y, p[2], zi)
+  local s = pack(y)
+  return s:sub(1, 31) .. string.char(bit32.bxor(s:byte(32), parity(x) * 128))
+end
+
+local function scalarBase(s)
+  local p, q = pointZero(), pointBase()
+  for i = 255, 0, -1 do
+    local b = bit32.band(bit32.rshift(s:byte(math.floor(i / 8) + 1), i % 8), 1)
+    for j = 1, 4 do sel(p[j], q[j], b) end
+    pointAdd(q, p)
+    pointAdd(p, p)
+    for j = 1, 4 do sel(p[j], q[j], b) end
+    if i % 32 == 0 then
+      yield()
+    end
+  end
+  return p
+end
+
+-- Reduce the 64 bytes in x (indexed from 0) modulo L.
+local function modL(x)
+  for i = 63, 32, -1 do
+    local carry = 0
+    for j = i - 32, i - 13 do
+      x[j] = x[j] + carry - 16 * x[i] * L[j - (i - 32)]
+      carry = math.floor((x[j] + 128) / 256)
+      x[j] = x[j] - carry * 256
+    end
+    x[i - 12] = x[i - 12] + carry
+    x[i] = 0
+  end
+  local carry = 0
+  for j = 0, 31 do
+    x[j] = x[j] + carry - math.floor(x[31] / 16) * L[j]
+    carry = math.floor(x[j] / 256)
+    x[j] = x[j] % 256
+  end
+  for j = 0, 31 do
+    x[j] = x[j] - carry * L[j]
+  end
+  local r = {}
+  for i = 0, 31 do
+    x[i + 1] = x[i + 1] + math.floor(x[i] / 256)
+    r[i] = x[i] % 256
+  end
+  return r
+end
+
+local function reduce(hex)
+  local x = {}
+  for i = 0, 63 do
+    x[i] = tonumber(hex:sub(2 * i + 1, 2 * i + 2), 16)
+  end
+  return modL(x)
+end
+
+local function scalarString(r)
+  local out = {}
+  for i = 0, 31 do
+    out[i + 1] = string.char(r[i])
+  end
+  return table.concat(out)
+end
+
+local function expandSeed(seed)
+  local h = crypto.fromHex(crypto.sha512(seed))
+  local first = string.char(bit32.band(h:byte(1), 248))
+  local last = string.char(bit32.bor(bit32.band(h:byte(32), 127), 64))
+  return first .. h:sub(2, 31) .. last, h:sub(33)
+end
+
+-- A new signing key: returns a 32-byte seed and the 32-byte public key.
+function crypto.signingKeypair()
+  local seed = crypto.randomBytes(32)
+  return seed, crypto.signingPublicKey(seed)
+end
+
+function crypto.signingPublicKey(seed)
+  return pointPack(scalarBase((expandSeed(seed))))
+end
+
+-- Returns a 64-byte signature of msg. `publicKey` saves working it out again.
+function crypto.sign(seed, msg, publicKey)
+  local a, prefix = expandSeed(seed)
+  publicKey = publicKey or crypto.signingPublicKey(seed)
+
+  local r = reduce(crypto.sha512(prefix .. msg))
+  local R = pointPack(scalarBase(scalarString(r)))
+  local h = reduce(crypto.sha512(R .. publicKey .. msg))
+
+  local x = {}
+  for i = 0, 63 do
+    x[i] = i < 32 and r[i] or 0
+  end
+  for i = 0, 31 do
+    for j = 0, 31 do
+      x[i + j] = x[i + j] + h[i] * a:byte(j + 1)
+    end
+  end
+
+  return R .. scalarString(modL(x))
+end
+
+-- Decode a public key into the negated point, or nil if it isn't on the curve.
+local function pointUnpackNeg(s)
+  local x, y, z, t = gf(), unpackgf(s), gf({1}), gf()
+  local num, den, den2, den4, den6, c, chk = gf(), gf(), gf(), gf(), gf(), gf(), gf()
+
+  sqr(num, y)
+  mul(den, num, D)
+  sub(num, num, z)
+  add(den, z, den)
+  sqr(den2, den)
+  sqr(den4, den2)
+  mul(den6, den4, den2)
+  mul(c, den6, num)
+  mul(c, c, den)
+
+  -- c ^ ((p - 5) / 8)
+  local b = gf(c)
+  for i = 250, 0, -1 do
+    sqr(b, b)
+    if i ~= 1 then
+      mul(b, b, c)
+    end
+    if i % 64 == 0 then
+      yield()
+    end
+  end
+
+  mul(b, b, num)
+  mul(b, b, den)
+  mul(b, b, den)
+  mul(x, b, den)
+
+  sqr(chk, x)
+  mul(chk, chk, den)
+  if pack(chk) ~= pack(num) then
+    mul(x, x, SQRTM1)
+  end
+  sqr(chk, x)
+  mul(chk, chk, den)
+  if pack(chk) ~= pack(num) then
+    return nil
+  end
+
+  if parity(x) == bit32.rshift(s:byte(32), 7) then
+    sub(x, gf(), x)
+  end
+  mul(t, x, y)
+  return {x, y, z, t}
+end
+
+-- Signature scalars must be below L, or one valid signature could be changed into another.
+local function scalarIsCanonical(s)
+  for i = 31, 0, -1 do
+    local b = s:byte(i + 1)
+    if b ~= L[i] then
+      return b < L[i]
+    end
+  end
+  return false
+end
+
+function crypto.verify(publicKey, msg, signature)
+  if type(publicKey) ~= "string" or #publicKey ~= 32 or type(signature) ~= "string" or #signature ~= 64 then
+    return false
+  end
+  local R, S = signature:sub(1, 32), signature:sub(33)
+  if not scalarIsCanonical(S) then
+    return false
+  end
+  local A = pointUnpackNeg(publicKey)
+  if not A then
+    return false
+  end
+
+  local h = scalarString(reduce(crypto.sha512(R .. publicKey .. msg)))
+
+  -- Work out [h]A + [S]B one bit at a time, sharing the doublings.
+  local B, both, p = pointBase(), {gf(A[1]), gf(A[2]), gf(A[3]), gf(A[4])}, pointZero()
+  pointAdd(both, B)
+  for i = 255, 0, -1 do
+    pointAdd(p, p)
+    local byte, shift = math.floor(i / 8) + 1, i % 8
+    local hb = bit32.band(bit32.rshift(h:byte(byte), shift), 1)
+    local sb = bit32.band(bit32.rshift(S:byte(byte), shift), 1)
+    if hb + sb == 2 then
+      pointAdd(p, both)
+    elseif hb == 1 then
+      pointAdd(p, A)
+    elseif sb == 1 then
+      pointAdd(p, B)
+    end
+    if i % 32 == 0 then
+      yield()
+    end
+  end
+
+  return pointPack(p) == R
 end
 
 local pool = ""

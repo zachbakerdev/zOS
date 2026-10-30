@@ -187,6 +187,8 @@ if username then
         keys.reset() -- old encryption keys belong to the old accounts
         system.resetConfig() -- back to defaults: secure boot on
         assert(auth.create(username, password, true))
+        -- Made here because the password just went into the random number generator.
+        env.require("trust").identity()
     end)
 end
 

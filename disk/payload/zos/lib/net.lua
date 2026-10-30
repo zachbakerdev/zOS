@@ -24,8 +24,8 @@ The port is the modem channel. Each computer also listens on a home channel, whi
 handshake replies, acks and replies to requests. Only an answer to a request this computer is
 waiting on is accepted there. Payloads can be anything but functions.
 
-Blocking calls ignore Ctrl+T, because terminate also reaches background services, which mustn't
-die from a keypress. Each has a time limit, except net.receive, which returns nil on terminate.
+Blocking calls ignore Ctrl+T, and each has a time limit, except net.receive, which returns nil
+on terminate. Services never see terminate, so a keypress can't stop them.
 
 Handshake (a -> b). Each side signs both ephemeral keys with its identity, so an attacker needs
 the identity key to impersonate either side, and recording traffic doesn't help them later.

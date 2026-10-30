@@ -2,7 +2,8 @@
 
 An app is installed as /apps/<id>/, holding:
 
-  app.manifest   { name = "Notes", description = "...", version = "1.0", priority = 10, author = "..." }
+  app.manifest   { name = "Notes", description = "...", version = "1.0", priority = 10, author = "...",
+                   minZos = "2.1" }
   main.lua       run from the desktop with `...` = session, app
   service.lua    optional: started at boot with `...` = app, runs in the background
   ...            any other files the app needs
@@ -25,14 +26,14 @@ apps.DIR = "/apps"
 apps.FORMAT_VERSION = 1
 apps.DEFAULT_PRIORITY = 100
 -- Built-in apps that can be upgraded but not removed.
-apps.PROTECTED = { appman = true }
+apps.PROTECTED = { appman = true, terminal = true, files = true }
 
 function apps.validId(id)
     return type(id) == "string" and id:match("^[a-z0-9_%-]+$") ~= nil and #id <= 32
 end
 
 -- A relative path made of plain names: no "..", no hidden files, no leading "/".
-local function validPath(path)
+function apps.validPath(path)
     if type(path) ~= "string" or path == "" or #path > 128 then return false end
     for part in (path .. "/"):gmatch("(.-)/") do
         if not part:match("^[%w_%-][%w_%.%-]*$") then return false end
@@ -49,6 +50,9 @@ local function checkManifest(m)
         if m[key] ~= nil and type(m[key]) ~= "string" then return false, "app.manifest's " .. key .. " isn't text" end
     end
     if m.priority ~= nil and type(m.priority) ~= "number" then return false, "app.manifest's priority isn't a number" end
+    if m.minZos ~= nil and (type(m.minZos) ~= "string" or not m.minZos:match("^%d[%d%.]*$")) then
+        return false, "app.manifest's minZos isn't a version like \"2.1\""
+    end
     return true
 end
 
@@ -61,6 +65,7 @@ local function info(id, dir, m)
         version = m.version,
         author = m.author,
         priority = m.priority or apps.DEFAULT_PRIORITY,
+        minZos = m.minZos,
         dir = "/" .. dir,
         main = "/" .. fs.combine(dir, "main.lua"),
         service = (fs.exists(service) and not fs.isDir(service)) and ("/" .. service) or nil,
@@ -86,7 +91,7 @@ function apps.parse(text)
 
     local count, size = 0, 0
     for path, data in pairs(pkg.files) do
-        if not validPath(path) or type(data) ~= "string" then
+        if not apps.validPath(path) or type(data) ~= "string" then
             return nil, "The app contains a bad file name: " .. tostring(path)
         end
         count, size = count + 1, size + #data
@@ -172,6 +177,11 @@ function apps.compareVersions(a, b)
     return 0
 end
 
+-- Whether this version of zOS is new enough for an app that needs minZos (which may be nil).
+function apps.supports(minZos)
+    return minZos == nil or apps.compareVersions(system.VERSION, minZos) >= 0
+end
+
 -- The environment app code runs in. `require` finds the app's own modules first,
 -- then the system libraries, which are shared with zOS.
 local function environment(app)
@@ -207,6 +217,10 @@ end
 
 -- Install (or replace) a package from apps.parse. Returns the installed app, or nil and an error.
 function apps.install(pkg)
+    if not apps.supports(pkg.manifest.minZos) then
+        return nil, pkg.manifest.name .. " needs zOS " .. pkg.manifest.minZos .. " or newer. This is zOS " ..
+            system.VERSION .. "."
+    end
     local dest = fs.combine(apps.DIR, pkg.id)
     local tmp = fs.combine(apps.DIR, ".installing-" .. pkg.id)
     if fs.exists(tmp) then fs.delete(tmp) end

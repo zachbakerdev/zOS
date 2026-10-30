@@ -32,6 +32,7 @@ end
 
 local function newFs(files)
   local fs = {}
+  local dirs = {} -- empty folders; others exist because of the files in them
   local function norm(p) return (p:gsub("^/+", "")) end
   function fs.combine(a, b)
     a, b = norm(a), norm(b or "")
@@ -42,17 +43,52 @@ local function newFs(files)
   function fs.getDir(p) return norm(p):match("^(.*)/[^/]*$") or "" end
   function fs.exists(p)
     p = norm(p)
-    if files[p] then return true end
+    if files[p] or dirs[p] then return true end
     for k in pairs(files) do if k:sub(1, #p + 1) == p .. "/" then return true end end
     return false
   end
+  function fs.getName(p) return norm(p):match("[^/]*$") end
+  function fs.isReadOnly(p) p = norm(p) return p == "rom" or p:sub(1, 4) == "rom/" end
+  function fs.list(p)
+    p = norm(p)
+    local prefix, seen, names = p == "" and "" or p .. "/", {}, {}
+    for _, set in ipairs({ files, dirs }) do
+      for k in pairs(set) do
+        local name = type(k) == "string" and k:sub(1, #prefix) == prefix and k:sub(#prefix + 1):match("^[^/]+")
+        if name and not seen[name] then
+          seen[name] = true
+          names[#names + 1] = name
+        end
+      end
+    end
+    table.sort(names)
+    return names
+  end
   function fs.isDir(p) return fs.exists(p) and not files[norm(p)] end
-  function fs.makeDir() end
+  function fs.getSize(p) return #files[norm(p)] end
+  function fs.getFreeSpace() return files.freeSpace or 1000000 end
+  function fs.makeDir(p) dirs[norm(p)] = true end
   function fs.delete(p)
     p = norm(p)
-    for k in pairs(files) do
-      if k == p or k:sub(1, #p + 1) == p .. "/" then files[k] = nil end
+    for _, set in ipairs({ files, dirs }) do
+      for k in pairs(set) do
+        if k == p or (type(k) == "string" and k:sub(1, #p + 1) == p .. "/") then set[k] = nil end
+      end
     end
+  end
+  function fs.copy(a, b)
+    a, b = norm(a), norm(b)
+    for _, set in ipairs({ files, dirs }) do
+      local found = {}
+      for k, v in pairs(set) do
+        if k == a or (type(k) == "string" and k:sub(1, #a + 1) == a .. "/") then found[b .. k:sub(#a + 1)] = v end
+      end
+      for k, v in pairs(found) do set[k] = v end
+    end
+  end
+  function fs.move(a, b)
+    fs.copy(a, b)
+    fs.delete(a)
   end
   function fs.open(p, mode)
     p = norm(p)
@@ -173,6 +209,22 @@ function sim.computer(id, opts)
           if filters[i] == nil or filters[i] == event[1] or event[1] == "terminate" then
             local ok, filter = coroutine.resume(co, table.unpack(event))
             if not ok then error(filter, 0) end
+            filters[i] = filter
+          end
+        end
+        event = { coroutine.yield() }
+      end
+    end,
+    waitForAny = function(...)
+      local threads, filters = {}, {}
+      for i, fn in ipairs({ ... }) do threads[i] = coroutine.create(fn) end
+      local event = {}
+      while true do
+        for i, co in ipairs(threads) do
+          if filters[i] == nil or filters[i] == event[1] or event[1] == "terminate" then
+            local ok, filter = coroutine.resume(co, table.unpack(event))
+            if not ok then error(filter, 0) end
+            if coroutine.status(co) == "dead" then return i end
             filters[i] = filter
           end
         end

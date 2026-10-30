@@ -154,6 +154,7 @@ if mode == "install" then
 end
 
 step("Copying system files", function()
+    if fs.exists("/etc/zos/update") then fs.delete("/etc/zos/update") end -- this disk replaces any update
     if fs.exists("/zos") then fs.delete("/zos") end
     fs.copy(fs.combine(PAYLOAD, "zos"), "/zos")
     if fs.exists("/startup.lua") then fs.delete("/startup.lua") end

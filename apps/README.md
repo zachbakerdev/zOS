@@ -22,15 +22,21 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
     description = "Write and keep notes", -- shown on the desktop and in App Manager
     priority = 10,                       -- lower comes first on the desktop and starts first (default 100)
     author = "you",
+    minZos = "2.1",                      -- optional: the oldest zOS it runs on
 }
 ```
+
+Set `minZos` when an app uses something a newer zOS added. Nothing older will install that
+version, whichever way it's installed, and the build stops if `minZos` is newer than the zOS in
+this repository. Computers keep the version they have until they update zOS. The check only runs
+when installing, so raise `minZos` before people need it, not after.
 
 ## Writing an app
 
 - `main.lua` gets `...` = `session, app`. `session` has `user`, `admin`, `secretKey` and
   `publicKey`. `app` has `id`, `name`, `version`, `dir` and so on.
 - `service.lua` gets `...` = `app`. It runs alongside the session, even while nobody is logged
-  in. Use `os.pullEventRaw`. Anything it draws goes to a hidden window. If it crashes, it stops
+  in. It never sees Ctrl+T. Anything it draws goes to a hidden window. If it crashes, it stops
   and the error goes to `/etc/zos/system.log`.
 - `require` finds the app's own modules first (`require("helper")` loads `helper.lua` from the
   app folder), then the zOS libraries (`ui`, `auth`, `keys`, `crypto`, `net`, `trust`, `system`, `apps`, ...).
@@ -56,5 +62,9 @@ A `.app` file is one `textutils.serialize`-style table:
 { format = "zos-app", formatVersion = 1, id = "notes", files = { ["main.lua"] = "...", ... } }
 ```
 
-The apps in `BUILT_IN_APPS` in `tools/make_disk.py` (currently App Manager) go on the setup
+Each release includes every app here. To ship a change, raise `version` in its `app.manifest`:
+computers only update to a higher version. **Get apps from GitHub** in App Manager installs and
+updates them.
+
+The apps in `BUILT_IN_APPS` in `tools/make_disk.py` (currently App Manager, Terminal and Files) go on the setup
 disk. Setup installs them, and they can be upgraded but not removed.

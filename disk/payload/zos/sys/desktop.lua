@@ -4,6 +4,7 @@ local session, run = ...
 local ui = require("ui")
 local apps = require("apps")
 local system = require("system")
+local update = require("update")
 
 local function status()
     return session.user .. "  " .. textutils.formatTime(os.time(), false)
@@ -15,10 +16,11 @@ local function items()
     for _, app in ipairs(apps.list()) do
         list[#list + 1] = { label = app.name, hint = app.description, app = app }
     end
+    local staged = update.stagedVersion()
     for _, item in ipairs({
         { label = "Settings", hint = "Password, keys, users, network, secure boot and label", screen = "settings" },
         { label = "Log out", hint = "Return to the login screen", action = "logout", fg = ui.theme.dim },
-        { label = "Reboot", hint = "Restart the computer", action = "reboot", fg = ui.theme.dim },
+        { label = "Reboot", hint = staged and ("Restart and install zOS " .. staged) or "Restart the computer", action = "reboot", fg = ui.theme.dim },
         { label = "Shut down", hint = "Turn the computer off", action = "shutdown", fg = ui.theme.dim },
     }) do
         list[#list + 1] = item

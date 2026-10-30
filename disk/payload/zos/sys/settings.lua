@@ -1,5 +1,5 @@
 -- zOS settings: your password, encryption keys, the network, the computer label and, for
--- admins, users and secure boot.
+-- admins, users, secure boot and updates.
 
 local session = ...
 local ui = require("ui")
@@ -9,6 +9,7 @@ local crypto = require("crypto")
 local system = require("system")
 local net = require("net")
 local trust = require("trust")
+local update = require("update")
 
 local TITLE = "Settings"
 local me = session.user
@@ -424,6 +425,54 @@ local function secureBoot()
     end
 end
 
+local function restart()
+    system.applyBootPolicy()
+    os.reboot()
+    while true do os.pullEventRaw() end
+end
+
+local function checkForUpdates()
+    ui.screen(TITLE .. " - Updates")
+    ui.text("Checking for updates...", ui.theme.dim)
+    local info, err = update.check()
+    if info == nil then return ui.message(TITLE, err, ui.theme.bad) end
+    if not info then return ui.message(TITLE, "zOS " .. system.VERSION .. " is up to date.", ui.theme.good) end
+
+    if update.stagedVersion() ~= info.version then
+        ui.text("zOS " .. info.version .. " is available (" .. math.ceil(info.size / 1024) .. " KB).")
+        if update.failedVersion() == info.version then
+            ui.text("It failed to start on this computer before, and zOS went back to " ..
+                system.VERSION .. ".", ui.theme.bad)
+        end
+        ui.text("")
+        if not ui.confirm("Download it?") then return end
+        ui.text("Downloading and checking...", ui.theme.dim)
+        local ok, downloadErr = update.download(info)
+        if not ok then return ui.message(TITLE, downloadErr, ui.theme.bad) end
+    end
+    ui.screen(TITLE .. " - Updates")
+    ui.text("zOS " .. info.version .. " will install when this computer restarts.", ui.theme.good)
+    ui.text("")
+    if ui.confirm("Restart now?") then restart() end
+end
+
+local function updates()
+    while true do
+        local staged, auto = update.stagedVersion(), system.autoUpdateEnabled()
+        local items = {
+            { label = "Installed: zOS " .. system.VERSION, fg = ui.theme.dim,
+                hint = staged and ("zOS " .. staged .. " installs at the next restart") or nil },
+            { label = "Check for updates", action = checkForUpdates },
+            { label = "Automatic updates: " .. (auto and "on" or "off"), hint = "Download by itself, install at the next restart",
+                action = function() system.setAutoUpdate(not auto, me) end },
+            { label = "Back", fg = ui.theme.dim },
+        }
+        local choice = ui.menu({ title = TITLE .. " - Updates", items = items, back = true })
+        if choice == nil or choice == #items then return end
+        if items[choice].action then items[choice].action() end
+    end
+end
+
 local selected = 1
 while true do
     local items = {
@@ -440,6 +489,7 @@ while true do
             hint = "Block booting from floppy disks",
             fg = not system.secureBootEnabled() and ui.theme.bad or nil,
         })
+        items[#items + 1] = { label = "Updates", action = updates, hint = "Check for a new version of zOS" }
     end
     items[#items + 1] = { label = "Back", fg = ui.theme.dim }
 

@@ -7,6 +7,7 @@ computers.
 - **Logins.** Passwords are salted and hashed, and repeated failed attempts lock the login.
 - **Desktop.** An app launcher with built-in apps and an app manager for installing more.
 - **Setup disk.** Installs or upgrades zOS and walks you through creating an admin account.
+- **Updates.** Finds new releases by itself and goes back to the old version if the new one won't start.
 - **Networking.** Encrypted, authenticated messages between computers, with root servers that
   vouch for who a computer is.
 
@@ -77,6 +78,24 @@ pastebin run <code> some/folder             # a folder instead of a floppy
 
    You should end up with `.../disk/<id>/install.lua`, `.../disk/<id>/payload/...` and so on.
 
+### From a GitHub release
+
+Each [release](https://github.com/zachbakerdev/zOS/releases) has the setup disk writer, the app
+disk writer and every `.app` file. In game, with a floppy in a disk drive:
+
+```
+wget run https://github.com/zachbakerdev/zOS/releases/latest/download/zos-disk.lua
+```
+
+To publish a release, set `system.VERSION` in `disk/payload/zos/lib/system.lua`, then push a tag
+that matches it. `.github/workflows/release.yml` runs the tests, builds everything and
+publishes the release.
+
+```
+git tag v2.0.0
+git push origin v2.0.0
+```
+
 ## Installing and upgrading
 
 Put the setup disk in a drive next to the target computer, then either:
@@ -84,7 +103,7 @@ Put the setup disk in a drive next to the target computer, then either:
 - **reboot the computer.** A computer without zOS boots from the disk and setup starts by
   itself, or
 - **run `disk/install`** from the shell. On a computer that already has zOS, log in and open the
-  Shell app to do this.
+  Terminal app to do this.
 
 For a new install, setup asks for:
 
@@ -99,6 +118,30 @@ If zOS is already installed, setup offers two options:
 - **Upgrade** replaces the system files and keeps users, apps and settings.
 - **Clean reinstall** deletes all accounts and their keys, then asks for a new admin account.
 
+### Updates
+
+zOS checks GitHub for a new release 30 seconds after booting and every 6 hours after that. A new
+version downloads in the background and installs the next time the computer restarts, and the
+**Reboot** item on the desktop says when one is waiting. Installed apps with a newer version
+in the release are updated at the same time, and App Manager can update them sooner.
+
+Admins can look for one straight away and restart to install it in **Settings → Updates**. Turn
+**Automatic updates** off there to only download what you choose. Computers need the HTTP API, and
+a server that blocks `github.com` can still upgrade with a setup disk, which also replaces any
+update that's waiting.
+
+- **Updates come from GitHub over HTTPS.** That connection is the only proof of where an update
+  came from: the size and SHA-256 in the manifest catch a damaged download, not a deliberate
+  change. Only versions newer than the installed one are accepted.
+- **Installing can't be left half done.** `/startup.lua` swaps the folders by renaming them at the
+  start of a boot, and finishes the job at the next boot if it's interrupted.
+- **A bad version is undone.** If the new version crashes before it finishes booting, zOS goes back
+  to the old one and doesn't download that version again by itself. An admin can still install it
+  from Settings. Apps aren't touched until the boot has got that far. An update that boots but has
+  bugs later isn't undone: use a setup disk or publish a newer release.
+
+The folders are in `/etc/zos/update/`, and each step is logged to `/etc/zos/system.log`.
+
 ## Using zOS
 
 ### Logging in
@@ -112,8 +155,8 @@ If zOS is already installed, setup offers two options:
 
 | app             | what it does |
 |-----------------|--------------|
-| **Files**       | Browse folders; edit, run, copy, move and delete files |
-| **Shell**       | The CraftOS shell (`exit` returns to the desktop) |
+| **Files**       | Browse folders; create, edit, copy, move and delete files and folders. To run a program, use the Terminal |
+| **Terminal**    | The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
 | **App Manager** | Install and remove apps |
 | **Settings**    | Change your password, set the computer label, view the network; admins also manage users, root servers and secure boot |
 | **About**       | System information |
@@ -144,6 +187,7 @@ README with the details.
 | [`apps/zos-notes`](apps/zos-notes) | **Notes**      | Personal notes, saved in `/home/<user>/notes/` |
 | [`apps/zos-calc`](apps/zos-calc)   | **Calculator** | Evaluates expressions like `sqrt(2) * pi`, with variables (`x = 5`) and `ans` |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
+| [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 
 Upgrading from zOS 1.2 or earlier removes the old built-in Mail, Notes and Calculator apps but
 keeps their data (`/etc/zos/mail/`, `/home/<user>/notes/`). Install the apps again to get them
@@ -166,6 +210,11 @@ the floppy and labels it `zOS <app> <version>`. You can also copy an app's folde
 `apps/zos-notes/notes/`) onto a floppy through the world save, as with the setup disk.
 
 ### Installing apps
+
+**Get apps from GitHub** in the App Manager lists every app in the latest release. It marks which
+are new and which are updates, and **Update all** installs every update at once. An app that needs
+a newer zOS is marked and left as it is until zOS is updated. These apps come from the same place as zOS updates, over HTTPS, and each download is checked
+against the list. **Install from URL or Pastebin** installs whatever it's given. An app that's already up to date is never replaced by an older one here.
 
 Use the **App Manager** app, or `appman` in the Shell:
 
@@ -193,6 +242,7 @@ An app is a folder with a manifest and a main program:
   description = "Shown at the bottom of the desktop",
   version = "1.0",
   author = "you",
+  minZos = "2.1",          -- optional: the oldest zOS it runs on
   main = "main.lua",
   service = "service.lua", -- optional, see below
 }
@@ -318,6 +368,36 @@ Revoking one in the app stops it renewing and frees the name, but the certificat
 keeps working until it expires, because computers don't check back with the root server. Keep the
 lifetime short if that matters to you.
 
+### File Share
+
+File Share is an optional app (port 4201) that lets computers download files straight from each
+other over their modems. Nothing sits in between, and its service answers even while nobody is
+logged in.
+
+1. **Verify each other.** Under **Computers → Add a computer**, pick a computer that was found or
+   enter its id. Compare the fingerprint shown with **This computer** on the other screen, and
+   accept only if they match exactly. Then do the same on the other computer: neither serves a
+   computer it hasn't added.
+2. **Share files.** Under **Shared files → Share a file**, enter a path. Single files only, and
+   nothing from `/etc`, `/zos`, `/rom` or `/startup.lua`, which hold passwords and keys.
+3. **Download.** Under **Computers**, pick the computer, then **Browse files**. Files are saved
+   to `/home/<user>/downloads/`, and never over an existing file.
+
+The full public key is stored when you accept, and every request and answer is checked against
+it, so a computer that changes key has to be verified again. Forgetting a computer stops it at
+once, even partway through a download.
+
+File lists and contents have their own encryption on top of `net`. Each connection makes a new
+key from two ephemeral X25519 keys, signed by the sending computer's verified identity key, and
+each chunk is sealed with ChaCha20 and HMAC-SHA256. See `apps/fileshare/share.lua` for the
+protocol. Files are only encrypted on their way between computers: they're ordinary files on both
+disks.
+
+The lists in `/etc/zos/fileshare/` belong to the computer, not to a user, so anyone who can log in
+can change what it shares and who it trusts. Whoever verifies a computer can download everything
+that's shared, since there are no per-file permissions. The file is held in memory at both ends
+during a download.
+
 ### Protocol
 
 Each handshake uses new X25519 keys, and each side signs both of them with its Ed25519 identity
@@ -362,7 +442,7 @@ CraftOS bios -> shell -> /startup.lua -> /zos/boot.lua -> login -> desktop
 |--------------------|----------|
 | `/startup.lua`     | bootstrap |
 | `/zos/`            | the system (replaced on upgrade) |
-| `/etc/zos/`        | accounts, keys, network identity, config, log |
+| `/etc/zos/`        | accounts, keys, network identity, config, log, updates in progress |
 | `/home/<user>/`    | users' files |
 | `/apps/`           | installed apps |
 | `/zos-backup/`     | your old startup file, if you had one |
@@ -375,8 +455,9 @@ Upgrades only replace `/startup.lua` and `/zos/`.
 tools/
   make_disk.py            packs disk/ into dist/zos-disk.lua, which writes the setup disk
   make_app_disks.py       packs each app in apps/ into dist/<app>-disk.lua, which writes an app disk
-apps/                     optional apps: root-server, zos-mail, zos-notes, zos-calc
-tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua
+  make_update.py          packs the update that computers download
+apps/                     optional apps: root-server, fileshare, zos-mail, zos-notes, zos-calc
+tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua, test_fileshare.lua, test_files.lua, test_update.lua
 disk/                     the setup floppy
   startup.lua             starts setup when a computer without zOS boots from the disk
   install.lua             the setup program
@@ -392,6 +473,7 @@ disk/                     the setup floppy
       lib/keys.lua        per-user key pairs, pinned keys
       lib/trust.lua       the computer's identity, trusted root servers, certificates
       lib/net.lua         encrypted messages over modems
+      lib/update.lua      finds, checks and stores updates
       sys/login.lua       login screen
       sys/desktop.lua     app launcher
       bin/appman.lua      command-line app manager
@@ -402,7 +484,7 @@ dist/                     generated programs
 ## Limitations
 
 - **Users can see each other's files.** ComputerCraft has no file permissions, so logins keep
-  strangers out but don't separate the people who can log in. Any user can open the Shell and
+  strangers out but don't separate the people who can log in. Any user can open the Terminal and
   read or change any file. Only give accounts to people you trust. Data encrypted with a user's
   key is the exception: only that user's password can unlock it.
 - **Network keys aren't protected by a password.** Networking runs while nobody is logged in, so
@@ -414,6 +496,9 @@ dist/                     generated programs
 - **A flood can delay new connections.** Only a few unfinished handshakes are kept, so a computer
   sending constant fake handshakes can hold up new sessions. Existing sessions keep working.
   Anyone can also jam a channel, since modems have no way to stop them.
+- **Updates trust GitHub.** Releases aren't signed, so anyone who can publish a release on this
+  repository can run code on every computer with automatic updates on, including reading its
+  accounts and keys.
 - **The world files are always a way in.** Anyone with access to the world or server files can
   get around zOS.
 - **A broken install can't be fixed from a disk.** If `/zos` is damaged and recovery can't load,
@@ -423,7 +508,7 @@ dist/                     generated programs
 
 ## Uninstalling
 
-From the Shell:
+From the Terminal:
 
 ```
 delete /startup.lua /zos /etc/zos /home

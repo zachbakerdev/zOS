@@ -199,6 +199,19 @@ do
   sim.run(function() return r.done end)
   check("terminate ends a receive", r.done)
 
+  -- terminate never reaches a service, which could be waiting in os.pullEvent or sleep
+  local terminated = false
+  e.env.require("services").start("watcher", function()
+    while true do
+      if e.env.os.pullEventRaw() == "terminate" then terminated = true end
+    end
+  end)
+  sim.advance(0.1)
+  e.env.os.queueEvent("terminate")
+  sim.advance(0.1)
+  check("terminate skips services", not terminated)
+  e.env.require("services").stop("watcher")
+
   -- a port nobody answers on
   local c = sim.computer(3)
   c.net.listen(6000)

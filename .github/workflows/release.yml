@@ -1,0 +1,72 @@
+# Publishes a GitHub release when a version tag is pushed:
+#
+#     git tag v2.0.0 && git push origin v2.0.0
+#
+# The tag must match system.VERSION in disk/payload/zos/lib/system.lua.
+# Computers update themselves from this release, so anything published here runs on them.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # to create the release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the zOS version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^system\.VERSION = "\(.*\)"$/\1/p' disk/payload/zos/lib/system.lua)
+          if [ "$TAG" != "v$version" ]; then
+            echo "::error::Tag $TAG doesn't match system.VERSION $version"
+            exit 1
+          fi
+
+      - name: Install Lua tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.1 liblua5.1-0-dev luarocks luajit
+          luarocks --tree lua_modules --lua-version=5.1 install luasrcdiet 1.0.0-2
+
+      - name: Run the tests
+        run: |
+          for test in tests/test_*.lua; do
+            luajit "$test"
+          done
+
+      - name: Build
+        run: |
+          ./build.sh
+          python3 tools/make_update.py
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > notes.md <<NOTES
+          ## Install
+
+          In game, with a floppy in a disk drive, write the setup disk:
+
+          \`\`\`
+          wget run https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/zos-disk.lua
+          \`\`\`
+
+          Then put it in a drive next to the target computer and reboot that computer.
+
+          To install or update apps, use App Manager > Get apps from GitHub.
+          \`zos-apps-disk.lua\` writes every app onto a floppy instead, the same way as the setup disk.
+          NOTES
+          gh release create "$TAG" dist/zos-disk.lua dist/zos-apps-disk.lua dist/apps/*.app \
+            dist/zos-update.bundle dist/zos-update.manifest dist/zos-apps.manifest \
+            --verify-tag --title "zOS ${TAG#v}" --notes-file notes.md --generate-notes

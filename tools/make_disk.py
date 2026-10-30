@@ -29,7 +29,7 @@ DEFAULT_OUT = os.path.join(ROOT, "dist", "zos-disk.lua")
 
 # Apps in apps/ that come with zOS. They're packed into payload/apps/<id>.app on the disk,
 # and setup installs them.
-BUILT_IN_APPS = ["appman"]
+BUILT_IN_APPS = ["appman", "terminal", "files"]
 
 # CC: Tweaked counts every file and folder as at least this many bytes of disk space.
 MIN_FILE_SIZE = 500

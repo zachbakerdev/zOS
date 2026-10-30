@@ -39,6 +39,18 @@ function system.applyBootPolicy()
     settings.save("/.settings")
 end
 
+-- Whether new versions of zOS download by themselves and install at the next boot.
+function system.autoUpdateEnabled()
+    return system.config().autoUpdate ~= false
+end
+
+function system.setAutoUpdate(enabled, by)
+    local config = system.config()
+    config.autoUpdate = enabled == true
+    util.writeTable(CONFIG, config)
+    system.log("automatic updates " .. (enabled and "enabled" or "disabled") .. " by " .. tostring(by))
+end
+
 function system.setSecureBoot(enabled, by)
     local config = system.config()
     config.secureBoot = enabled == true

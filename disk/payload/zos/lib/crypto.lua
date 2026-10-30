@@ -98,6 +98,9 @@ local function sha256(msg)
 
   for offset = 1, #msg, 64 do
     sha256Block(msg, offset, H)
+    if offset > 1 and offset % 16384 == 1 then
+      yield() -- long messages, like an update, would take too long without yielding
+    end
   end
 
   local out = {}

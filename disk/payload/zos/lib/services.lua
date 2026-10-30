@@ -45,7 +45,10 @@ function services.run()
     local w, h = term.native().getSize()
     screen = window.create(term.native(), 1, 1, w, h, false)
     while true do
-        local event = table.pack(os.pullEventRaw())
+        -- Ctrl+T is for whatever's on screen. In the Terminal, os.pullEvent raises on terminate,
+        -- which would kill any service waiting in it or in sleep.
+        local event
+        repeat event = table.pack(os.pullEventRaw()) until event[1] ~= "terminate"
         local ids = {}
         for id in pairs(running) do ids[#ids + 1] = id end
         table.sort(ids, function(a, b) return running[a].seq < running[b].seq end)
@@ -54,7 +57,7 @@ function services.run()
             if task and not task.started then
                 task.started = true
                 resume(id, task, table.unpack(task.args, 1, task.args.n))
-            elseif task and (task.filter == nil or task.filter == event[1] or event[1] == "terminate") then
+            elseif task and (task.filter == nil or task.filter == event[1]) then
                 resume(id, task, table.unpack(event, 1, event.n))
             end
         end

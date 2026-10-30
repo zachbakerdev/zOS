@@ -1,10 +1,11 @@
--- zOS App Manager: install .app files from disks, files or the web, and remove apps.
+-- zOS App Manager: install .app files from GitHub, disks, files or the web, and remove apps.
 -- Only administrators can install or remove apps, since apps can change any file.
 
 local session = ...
 local ui = require("ui")
 local apps = require("apps")
 local system = require("system")
+local update = require("update")
 
 local TITLE = "App Manager"
 
@@ -15,11 +16,20 @@ end
 -- How a package compares with what's installed, e.g. "new" or "update from 1.0".
 local function status(pkg)
     local current = apps.get(pkg.id)
-    if not current then return "new" end
+    if not current then
+        return apps.supports(pkg.manifest.minZos) and "new" or ("needs zOS " .. pkg.manifest.minZos)
+    end
     local cmp = apps.compareVersions(pkg.manifest.version, current.version)
+    if not apps.supports(pkg.manifest.minZos) then return "needs zOS " .. pkg.manifest.minZos end
     if cmp > 0 then return "update from " .. current.version end
     if cmp < 0 then return "older than installed " .. current.version end
     return "installed"
+end
+
+-- Newer versions of zOS are in Settings, for anyone who can install them.
+local function needsZos(name, minZos)
+    ui.message(TITLE, name .. " needs zOS " .. minZos .. " or newer, and this computer has zOS " ..
+        system.VERSION .. ". Check Settings > Updates.", ui.theme.bad)
 end
 
 local function install(pkg)
@@ -27,6 +37,7 @@ local function install(pkg)
     if not session.admin then
         return ui.message(TITLE, "Only administrators can install apps.", ui.theme.bad)
     end
+    if not apps.supports(m.minZos) then return needsZos(m.name, m.minZos) end
 
     ui.screen(TITLE)
     ui.text(m.name .. " " .. m.version .. "  (" .. status(pkg) .. ")", ui.theme.accent)
@@ -126,6 +137,78 @@ local function fromWeb()
     install(pkg)
 end
 
+local function githubStatus(entry)
+    if not entry.supported then return "needs zOS " .. entry.minZos end
+    if entry.newer then return "update from " .. entry.current end
+    if not entry.current then return "new" end
+    return apps.compareVersions(entry.version, entry.current) < 0 and "older than installed" or "installed"
+end
+
+-- Download and install every update without asking about each one.
+local function updateAll(updates)
+    ui.screen(TITLE .. " - Update all")
+    for _, entry in ipairs(updates) do
+        ui.text(entry.name .. " " .. entry.version .. "  (" .. githubStatus(entry) .. ")")
+    end
+    ui.text("")
+    if not ui.confirm("Install " .. #updates .. " update(s)?") then return end
+
+    local problems = {}
+    for _, entry in ipairs(updates) do
+        ui.text("Updating " .. entry.name .. "...", ui.theme.dim)
+        local pkg, err = update.downloadApp(entry)
+        local app = pkg
+        if pkg then app, err = apps.install(pkg) end
+        if app then
+            system.log(session.user .. " installed app " .. app.id .. " " .. app.version)
+        else
+            problems[#problems + 1] = entry.name .. ": " .. tostring(err)
+        end
+    end
+    if #problems > 0 then return ui.message(TITLE, table.concat(problems, "\n\n"), ui.theme.bad) end
+    ui.message(TITLE, "Everything is up to date.", ui.theme.good)
+end
+
+local function fromGitHub()
+    ui.screen(TITLE)
+    ui.text("Checking GitHub for apps...", ui.theme.dim)
+    local list, listErr = update.checkApps()
+    if not list then return ui.message(TITLE, listErr, ui.theme.bad) end
+
+    local updates = {}
+    for _, entry in ipairs(list) do
+        if entry.newer and entry.supported then updates[#updates + 1] = entry end
+    end
+
+    local items = {}
+    if #updates > 0 then items[1] = { label = "Update all (" .. #updates .. ")", hint = "Install every update" } end
+    local first = #items
+    for _, entry in ipairs(list) do
+        items[#items + 1] = { label = entry.name .. " " .. entry.version .. "  (" .. githubStatus(entry) .. ")",
+            hint = entry.description,
+            fg = ((entry.current and not entry.newer) or not entry.supported) and ui.theme.dim or nil }
+    end
+    items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+
+    local choice = ui.menu({ title = TITLE .. " - GitHub", items = items, back = true })
+    if choice == nil or choice == #items then return end
+
+    local entry = list[choice - first]
+    if entry and not entry.supported then return needsZos(entry.name, entry.minZos) end
+    if entry and entry.current and not entry.newer then
+        return ui.message(TITLE, entry.name .. " is up to date.", ui.theme.good)
+    end
+    if not session.admin then
+        return ui.message(TITLE, "Only administrators can install apps.", ui.theme.bad)
+    end
+    if not entry then return updateAll(updates) end
+    ui.screen(TITLE)
+    ui.text("Downloading " .. entry.name .. "...", ui.theme.dim)
+    local pkg, err = update.downloadApp(entry)
+    if not pkg then return ui.message(TITLE, err, ui.theme.bad) end
+    install(pkg)
+end
+
 local function manage(app)
     ui.screen(TITLE)
     ui.text(app.name .. " " .. app.version, ui.theme.accent)
@@ -167,6 +250,7 @@ end
 local selected = 1
 while true do
     local items = {
+        { label = "Get apps from GitHub", hint = "Install and update apps, needs the HTTP API", action = fromGitHub },
         { label = "Install from disk", hint = "Find .app files on floppy disks", action = fromDisk },
         { label = "Install from file...", hint = "Enter the path of a .app file", action = fromFile },
         { label = "Install from URL or Pastebin...", hint = "Needs the HTTP API", action = fromWeb },

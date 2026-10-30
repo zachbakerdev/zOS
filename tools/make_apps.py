@@ -3,7 +3,7 @@
 
 An app's source is a folder, apps/<id>/, holding:
 
-    app.manifest    { name = "Notes", description = "...", version = "1.0", priority = 10 }
+    app.manifest    { name = "Notes", description = "...", version = "1.0", priority = 10, minZos = "2.1" }
     main.lua        the program the desktop runs
     service.lua     optional: started at boot to run in the background
     ...             any other files the app needs (modules, data)
@@ -31,7 +31,7 @@ import os
 import re
 import sys
 
-from make_disk import PASTEBIN_LIMIT, ROOT, build, collect_files, lua_string, upload, usage_lines
+from make_disk import PASTEBIN_LIMIT, ROOT, build, collect_files, lua_string, read_version, upload, usage_lines
 from minify_lua import minify_files
 
 APPS = os.path.join(ROOT, "apps")
@@ -40,6 +40,7 @@ DISK_OUT = os.path.join(ROOT, "dist", "zos-apps-disk.lua")
 
 FORMAT_VERSION = 1
 ID_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
+MIN_ZOS = re.compile(r"^\d[\d.]*$")
 # Must match validPath in disk/payload/zos/lib/apps.lua.
 PATH_PART = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 
@@ -180,6 +181,16 @@ def check_manifest(m):
             raise ManifestError(f"{key} must be a string")
     if "priority" in m and (isinstance(m["priority"], bool) or not isinstance(m["priority"], (int, float))):
         raise ManifestError("priority must be a number")
+    if "minZos" in m and (not isinstance(m["minZos"], str) or not MIN_ZOS.match(m["minZos"])):
+        raise ManifestError("minZos must be a version string, like minZos = \"2.1\" (in quotes)")
+
+
+def version_key(version):
+    """Compares like apps.compareVersions in lib/apps.lua, where missing numbers count as 0."""
+    numbers = [int(n) for n in re.findall(r"\d+", version)]
+    while numbers and numbers[-1] == 0:
+        numbers.pop()
+    return numbers
 
 
 def find_apps():
@@ -219,6 +230,9 @@ def pack(app, minify=True):
         check_manifest(manifest)
     except ManifestError as e:
         fail(f"app.manifest: {e}")
+    # It ships with this version of zOS, so nothing could ever install it.
+    if version_key(manifest.get("minZos", "0")) > version_key(read_version()):
+        fail(f"app.manifest: needs zOS {manifest['minZos']}, but this is zOS {read_version()}")
 
     packed = minify_files(files) if minify else files
 

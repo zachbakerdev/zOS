@@ -1,4 +1,4 @@
---[[ zOS apps: .app packages, installing, removing and running them.
+--[[ zOS apps: .zapp packages, installing, removing and running them.
 
 An app is installed as /apps/<id>/, holding:
 
@@ -8,7 +8,7 @@ An app is installed as /apps/<id>/, holding:
   service.lua    optional: started at boot with `...` = app, runs in the background
   ...            any other files the app needs
 
-Apps are distributed as .app files (made by tools/make_apps.py): one serialised table,
+Apps are distributed as .zapp files (made by tools/make_apps.py): one serialised table,
 
   { format = "zos-app", formatVersion = 1, id = "notes", files = { ["main.lua"] = "...", ... } }
 
@@ -77,11 +77,11 @@ end
 -- Packages
 ------------------------------------------------------------------------------
 
--- Check and unpack the text of a .app file. Returns a package
+-- Check and unpack the text of a .zapp file. Returns a package
 -- { id, manifest, files, count, size }, or nil and an error message.
 function apps.parse(text)
     local pkg = type(text) == "string" and textutils.unserialize(text)
-    if type(pkg) ~= "table" or pkg.format ~= "zos-app" then return nil, "This isn't a .app file." end
+    if type(pkg) ~= "table" or pkg.format ~= "zos-app" then return nil, "This isn't a .zapp file." end
     if pkg.formatVersion ~= apps.FORMAT_VERSION then
         return nil, "This app was packaged for a different version of zOS (format " ..
             tostring(pkg.formatVersion) .. ")."
@@ -119,7 +119,7 @@ function apps.readPackage(path)
     return apps.parse(text)
 end
 
--- Download a .app file. `source` is a URL or a Pastebin code.
+-- Download a .zapp file. `source` is a URL or a Pastebin code.
 function apps.download(source)
     if not http then return nil, "The HTTP API is disabled on this server." end
     local url = source

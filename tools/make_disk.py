@@ -27,7 +27,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISK = os.path.join(ROOT, "disk")
 DEFAULT_OUT = os.path.join(ROOT, "dist", "zos-disk.lua")
 
-# Apps in apps/ that come with zOS. They're packed into payload/apps/<id>.app on the disk,
+# Apps in apps/ that come with zOS. They're packed into payload/apps/<id>.zapp on the disk,
 # and setup installs them.
 BUILT_IN_APPS = ["appman", "terminal", "files"]
 
@@ -61,14 +61,14 @@ def collect_files(root=DISK, prefix=""):
 
 
 def built_in_apps(minify=True):
-    """The built-in apps as (disk path, .app bytes)."""
+    """The built-in apps as (disk path, .zapp bytes)."""
     from make_apps import find_apps, pack  # make_apps imports this module
 
     apps = {app["id"]: app for app in find_apps()}
     missing = [app_id for app_id in BUILT_IN_APPS if app_id not in apps]
     if missing:
         sys.exit(f"Built-in app(s) missing from apps/: {', '.join(missing)}")
-    return [(f"payload/apps/{app_id}.app", pack(apps[app_id], minify)[2].encode()) for app_id in BUILT_IN_APPS]
+    return [(f"payload/apps/{app_id}.zapp", pack(apps[app_id], minify)[2].encode()) for app_id in BUILT_IN_APPS]
 
 
 def lua_string(data):

@@ -81,7 +81,7 @@ pastebin run <code> some/folder             # a folder instead of a floppy
 ### From a GitHub release
 
 Each [release](https://github.com/zachbakerdev/zOS/releases) has the setup disk writer, the app
-disk writer and every `.app` file. In game, with a floppy in a disk drive:
+disk writer and every `.zapp` file. In game, with a floppy in a disk drive:
 
 ```
 wget run https://github.com/zachbakerdev/zOS/releases/latest/download/zos-disk.lua

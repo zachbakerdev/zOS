@@ -118,7 +118,7 @@ ui.text(mode == "upgrade" and "- keep your secure boot setting" or "- turn on se
 ui.text("- install the built-in apps")
 if fromV1 then
     ui.text("- move your zOS 1 apps to " .. BACKUP .. "/apps-v1; zOS " .. VERSION ..
-        " installs apps from .app files instead", ui.theme.dim)
+        " installs apps from .zapp files instead", ui.theme.dim)
 end
 ui.text("")
 if not ui.confirm("Continue?") then

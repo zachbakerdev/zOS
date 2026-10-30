@@ -1,4 +1,4 @@
--- zOS App Manager: install .app files from GitHub, disks, files or the web, and remove apps.
+-- zOS App Manager: install .zapp files from GitHub, disks, files or the web, and remove apps.
 -- Only administrators can install or remove apps, since apps can change any file.
 
 local session = ...
@@ -67,7 +67,7 @@ local function install(pkg)
     ui.message(TITLE, "Installed " .. app.name .. " " .. app.version .. ". It is on the desktop.", ui.theme.good)
 end
 
--- Every .app file in the top folder of each floppy.
+-- Every .zapp file in the top folder of each floppy.
 local function findOnDisks()
     local found = {}
     for _, side in ipairs(peripheral.getNames()) do
@@ -75,7 +75,7 @@ local function findOnDisks()
             local root = disk.getMountPath(side)
             for _, name in ipairs(fs.list(root)) do
                 local path = fs.combine(root, name)
-                if name:match("%.app$") and not fs.isDir(path) then
+                if name:match("%.zapp$") and not fs.isDir(path) then
                     local pkg, err = apps.readPackage(path)
                     found[#found + 1] = { path = path, pkg = pkg, err = err }
                 end
@@ -87,10 +87,10 @@ end
 
 local function fromDisk()
     ui.screen(TITLE)
-    ui.text("Looking for .app files...", ui.theme.dim)
+    ui.text("Looking for .zapp files...", ui.theme.dim)
     local found = findOnDisks()
     if #found == 0 then
-        return ui.message(TITLE, "No .app files found. Put a floppy with apps on it in a disk drive " ..
+        return ui.message(TITLE, "No .zapp files found. Put a floppy with apps on it in a disk drive " ..
             "next to this computer.", ui.theme.bad)
     end
 
@@ -116,7 +116,7 @@ end
 
 local function fromFile()
     ui.screen(TITLE)
-    ui.text("Enter the path of a .app file, e.g. disk/notes.app", ui.theme.dim)
+    ui.text("Enter the path of a .zapp file, e.g. disk/notes.zapp", ui.theme.dim)
     ui.text("")
     local path = ui.input("Path")
     if path == "" then return end
@@ -127,7 +127,7 @@ end
 
 local function fromWeb()
     ui.screen(TITLE)
-    ui.text("Download a .app file. Enter a full URL or a Pastebin code.", ui.theme.dim)
+    ui.text("Download a .zapp file. Enter a full URL or a Pastebin code.", ui.theme.dim)
     ui.text("")
     local source = ui.input("URL or Pastebin code")
     if source == "" then return end
@@ -251,8 +251,8 @@ local selected = 1
 while true do
     local items = {
         { label = "Get apps from GitHub", hint = "Install and update apps, needs the HTTP API", action = fromGitHub },
-        { label = "Install from disk", hint = "Find .app files on floppy disks", action = fromDisk },
-        { label = "Install from file...", hint = "Enter the path of a .app file", action = fromFile },
+        { label = "Install from disk", hint = "Find .zapp files on floppy disks", action = fromDisk },
+        { label = "Install from file...", hint = "Enter the path of a .zapp file", action = fromFile },
         { label = "Install from URL or Pastebin...", hint = "Needs the HTTP API", action = fromWeb },
         { label = "Installed apps (" .. #apps.list() .. ")", hint = "View or remove apps", action = installed },
         { label = "Back", fg = ui.theme.dim },

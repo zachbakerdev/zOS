@@ -4,7 +4,7 @@ Each release has two files (made by tools/make_update.py):
 
   zos-update.manifest   the version, size and SHA-256 of the bundle
   zos-update.bundle     a serialised table of the new system files and every app
-  zos-apps.manifest     the version, size and SHA-256 of each .app in the release
+  zos-apps.manifest     the version, size and SHA-256 of each .zapp in the release
 
 Everything comes from RELEASES over HTTPS, and that connection is what's trusted: whatever GitHub
 serves for this repository runs as system code. The sizes and hashes catch damaged downloads, not
@@ -137,7 +137,7 @@ local function checkBundle(bundle, info)
     for id, text in pairs(bundle.apps or {}) do
         local pkg, err = apps.parse(text)
         if not pkg or pkg.id ~= id then return nil, "The update's app '" .. id .. "' is broken: " .. tostring(err) end
-        files["apps/" .. id .. ".app"] = text
+        files["apps/" .. id .. ".zapp"] = text
     end
     return files
 end
@@ -221,7 +221,7 @@ end
 
 -- Download an app from checkApps() and check it. Returns a package for apps.install.
 function update.downloadApp(entry)
-    local text, err = get(update.RELEASES .. "/download/v" .. entry.release .. "/" .. entry.id .. ".app")
+    local text, err = get(update.RELEASES .. "/download/v" .. entry.release .. "/" .. entry.id .. ".zapp")
     if not text then return nil, err end
     if #text ~= entry.size or crypto.sha256(text) ~= entry.sha256 then
         return nil, "The download is damaged or has been changed."

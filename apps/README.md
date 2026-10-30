@@ -1,6 +1,6 @@
 # zOS apps
 
-Each folder here is one app. `tools/make_apps.py` packs it into a single `.app` file, which the
+Each folder here is one app. `tools/make_apps.py` packs it into a single `.zapp` file, which the
 App Manager installs.
 
 ```
@@ -46,17 +46,17 @@ when installing, so raise `minZos` before people need it, not after.
 ## Packaging
 
 ```
-python3 tools/make_apps.py                # dist/apps/<id>.app for every app
+python3 tools/make_apps.py                # dist/apps/<id>.zapp for every app
 python3 tools/make_apps.py notes          # only some
 python3 tools/make_apps.py --disk         # also dist/zos-apps-disk.lua: `pastebin run` it to write the apps onto a floppy
-python3 tools/make_apps.py --upload       # also upload each .app to Pastebin (needs PASTEBIN_DEV_KEY)
+python3 tools/make_apps.py --upload       # also upload each .zapp to Pastebin (needs PASTEBIN_DEV_KEY)
 ```
 
 In App Manager, use **Install from disk** with that floppy, **Install from file...** with a path,
 or **Install from URL or Pastebin...** with a link or paste code. Only admins can install or
 remove apps.
 
-A `.app` file is one `textutils.serialize`-style table:
+A `.zapp` file is one `textutils.serialize`-style table:
 
 ```lua
 { format = "zos-app", formatVersion = 1, id = "notes", files = { ["main.lua"] = "...", ... } }

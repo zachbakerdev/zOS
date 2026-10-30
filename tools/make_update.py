@@ -3,8 +3,8 @@
 
     dist/zos-update.bundle     a serialised Lua table of the system files and every app
     dist/zos-update.manifest   the version, size and SHA-256 of the bundle
-    dist/apps/<id>.app         the apps, for App Manager
-    dist/zos-apps.manifest     the version, size and SHA-256 of each .app
+    dist/apps/<id>.zapp         the apps, for App Manager
+    dist/zos-apps.manifest     the version, size and SHA-256 of each .zapp
 
     python3 tools/make_update.py
 
@@ -74,10 +74,10 @@ def main():
         packages.append((app, manifest, text))
     bundle = build_bundle(version, not args.no_minify, packages)
 
-    # Written here so the .app files on the release are the ones the list describes.
+    # Written here so the .zapp files on the release are the ones the list describes.
     os.makedirs(os.path.join(args.output_dir, "apps"), exist_ok=True)
     for app, _, text in packages:
-        with open(os.path.join(args.output_dir, "apps", f"{app['id']}.app"), "w", encoding="ascii", newline="\n") as f:
+        with open(os.path.join(args.output_dir, "apps", f"{app['id']}.zapp"), "w", encoding="ascii", newline="\n") as f:
             f.write(text)
     out = os.path.join(args.output_dir, "zos-update.bundle")
     with open(out, "wb") as f:

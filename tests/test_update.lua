@@ -271,9 +271,9 @@ end
 -- Apps from the same release ---------------------------------------------------------
 
 local APPS_MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-apps.manifest"
-local function appUrl(id) return "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/" .. id .. ".app" end
+local function appUrl(id) return "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/" .. id .. ".zapp" end
 
--- Publish these apps (id -> version, or { version, minZos }) as a list and .app files.
+-- Publish these apps (id -> version, or { version, minZos }) as a list and .zapp files.
 local function publishApps(c, list)
   local ids = {}
   for id in pairs(list) do ids[#ids + 1] = id end
@@ -481,12 +481,12 @@ end
 
 do -- Installing from a file gets the same check.
   local c = setup(withApps())
-  c.files["new.app"] = appText(c, "fresh", "1.0", "3.0")
+  c.files["new.zapp"] = appText(c, "fresh", "1.0", "3.0")
   appman(c, true)
   screenHas(c, "Install from file")
   pick(c, 2)
   screenHas(c, "Path")
-  c.env.os.queueEvent("sim_line", "new.app")
+  c.env.os.queueEvent("sim_line", "new.zapp")
   check("a file gets the same check", screenHas(c, "needs zOS 3.0"))
   check("nothing installed from the file", not c.env.fs.exists("apps/fresh"))
 end

@@ -67,6 +67,6 @@ jobs:
           To install or update apps, use App Manager > Get apps from GitHub.
           \`zos-apps-disk.lua\` writes every app onto a floppy instead, the same way as the setup disk.
           NOTES
-          gh release create "$TAG" dist/zos-disk.lua dist/zos-apps-disk.lua dist/apps/*.app \
+          gh release create "$TAG" dist/zos-disk.lua dist/zos-apps-disk.lua dist/apps/*.zapp \
             dist/zos-update.bundle dist/zos-update.manifest dist/zos-apps.manifest \
             --verify-tag --title "zOS ${TAG#v}" --notes-file notes.md --generate-notes

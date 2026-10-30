@@ -1,8 +1,0 @@
-{
-  name = "Notes",
-  description = "Your personal notes",
-  version = "1.0",
-  author = "zOS",
-  main = "main.lua",
-  order = 3,
-}

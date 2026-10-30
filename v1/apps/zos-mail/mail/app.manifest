@@ -1,9 +1,0 @@
-{
-  name = "Mail",
-  description = "Send messages to users on any zOS computer",
-  version = "1.1",
-  author = "zOS",
-  main = "main.lua",
-  service = "service.lua",
-  order = 1,
-}

@@ -1,8 +1,0 @@
-{
-  name = "App Manager",
-  description = "Install and remove applications",
-  version = "1.0",
-  author = "zOS",
-  main = "main.lua",
-  order = 6,
-}

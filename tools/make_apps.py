@@ -21,6 +21,8 @@ To get them into the game:
 
 Then use App Manager's "Install from disk" with that floppy, or "Install from URL or Pastebin"
 with a paste code.
+
+Lua files are minified (see minify_lua.py) unless you pass --no-minify.
 """
 
 import argparse
@@ -30,6 +32,7 @@ import re
 import sys
 
 from make_disk import PASTEBIN_LIMIT, ROOT, build, collect_files, lua_string, upload, usage_lines
+from minify_lua import minify_files
 
 APPS = os.path.join(ROOT, "apps")
 DEFAULT_OUT_DIR = os.path.join(ROOT, "dist", "apps")
@@ -192,8 +195,10 @@ def find_apps():
     return found
 
 
-def pack(app):
-    """Read and check the app at app["path"]. Returns (manifest, files, .app text) or exits."""
+def pack(app, minify=True):
+    """Read and check the app at app["path"]. Returns (manifest, files, .app text) or exits.
+
+    With minify, the .app holds minified Lua files."""
     def fail(message):
         sys.exit(f"apps/{app['id']}: {message}")
 
@@ -215,6 +220,8 @@ def pack(app):
     except ManifestError as e:
         fail(f"app.manifest: {e}")
 
+    packed = minify_files(files) if minify else files
+
     out = [
         "{",
         '  format = "zos-app",',
@@ -222,7 +229,7 @@ def pack(app):
         f"  id = {lua_string(app['id'].encode())},",
         "  files = {",
     ]
-    for path, data in files:
+    for path, data in packed:
         out.append(f"    [{lua_string(path.encode())}] = {lua_string(data)},")
     out += ["  },", "}"]
     return manifest, files, "\n".join(out) + "\n"
@@ -245,6 +252,7 @@ def main():
     parser.add_argument("--disk", action="store_true", help="also write dist/zos-apps-disk.lua, which writes the apps onto a floppy")
     parser.add_argument("--upload", action="store_true", help="also upload each .app to Pastebin (needs PASTEBIN_DEV_KEY)")
     parser.add_argument("--public", action="store_true", help="with --upload: make the pastes public instead of unlisted")
+    parser.add_argument("--no-minify", action="store_true", help="keep the Lua files' comments and indentation")
     args = parser.parse_args()
 
     apps = find_apps()
@@ -264,7 +272,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     packages = []
     for app in apps:
-        manifest, files, text = pack(app)
+        manifest, files, text = pack(app, not args.no_minify)
         packages.append((app, manifest, text))
         out = os.path.join(args.output_dir, f"{app['id']}.app")
         with open(out, "w", encoding="ascii", newline="\n") as f:

@@ -11,6 +11,7 @@ The disk it writes is the normal setup disk: install zOS from it as usual.
 
 File contents are stored as escaped Lua strings, one per line, so the program
 survives Pastebin's line-ending conversion and whitespace changes byte for byte.
+Lua files are minified first (see minify_lua.py) unless you pass --no-minify.
 """
 
 import argparse
@@ -19,6 +20,8 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+
+from minify_lua import minify_files
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DISK = os.path.join(ROOT, "disk")
@@ -57,7 +60,7 @@ def collect_files(root=DISK, prefix=""):
     return files
 
 
-def built_in_apps():
+def built_in_apps(minify=True):
     """The built-in apps as (disk path, .app bytes)."""
     from make_apps import find_apps, pack  # make_apps imports this module
 
@@ -65,7 +68,7 @@ def built_in_apps():
     missing = [app_id for app_id in BUILT_IN_APPS if app_id not in apps]
     if missing:
         sys.exit(f"Built-in app(s) missing from apps/: {', '.join(missing)}")
-    return [(f"payload/apps/{app_id}.app", pack(apps[app_id])[2].encode()) for app_id in BUILT_IN_APPS]
+    return [(f"payload/apps/{app_id}.app", pack(apps[app_id], minify)[2].encode()) for app_id in BUILT_IN_APPS]
 
 
 def lua_string(data):
@@ -256,9 +259,12 @@ def main():
     parser.add_argument("-o", "--output", default=DEFAULT_OUT, help="where to write the program (default: dist/zos-disk.lua)")
     parser.add_argument("--upload", action="store_true", help="also upload it to Pastebin (needs PASTEBIN_DEV_KEY)")
     parser.add_argument("--public", action="store_true", help="with --upload: make the paste public instead of unlisted")
+    parser.add_argument("--no-minify", action="store_true", help="keep the Lua files' comments and indentation")
     args = parser.parse_args()
 
-    files = sorted(collect_files() + built_in_apps())
+    files = sorted(collect_files() + built_in_apps(not args.no_minify))
+    if not args.no_minify:
+        files = minify_files(files)
     version = read_version()
     text = build_setup(files, version)
 

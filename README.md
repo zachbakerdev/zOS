@@ -24,7 +24,7 @@ The `disk/` folder is the contents of the setup floppy. You can get it onto a fl
 ### From Pastebin
 
 `tools/make_disk.py` packs `disk/` into a single Lua program, `dist/zos-disk.lua` (about
-95 KB), that writes the setup disk when you run it in game. You don't need access to the world
+60 KB), that writes the setup disk when you run it in game. You don't need access to the world
 save.
 
 ```
@@ -32,6 +32,14 @@ python3 tools/make_disk.py                  # writes dist/zos-disk.lua
 python3 tools/make_disk.py -o other.lua     # or somewhere else
 python3 tools/make_disk.py --upload         # and uploads it to Pastebin (unlisted)
 python3 tools/make_disk.py --upload --public
+python3 tools/make_disk.py --no-minify      # keep comments and indentation in the Lua files
+```
+
+Minifying needs LuaSrcDiet. Install it once, from the repository root (this needs Lua 5.1 and
+its headers, e.g. Debian's `lua5.1` and `liblua5.1-0-dev`):
+
+```
+luarocks --tree lua_modules --lua-version=5.1 install luasrcdiet 1.0.0-2
 ```
 
 `--upload` needs a Pastebin API key in `PASTEBIN_DEV_KEY` (get one at
@@ -48,6 +56,9 @@ pastebin run <code> some/folder             # a folder instead of a floppy
   can reuse an old setup disk.
 - It checks there's enough free space, reads each file back after writing it, and labels the
   floppy `zOS Setup <version>`.
+- Lua files are minified with [LuaSrcDiet](https://github.com/jirutka/luasrcdiet), which also
+  checks that each one compiles to the same bytecode as before. Line numbers in error messages
+  won't match the source, so use `--no-minify` when debugging.
 - Files are stored as escaped strings, one per line, so Pastebin's line-ending and whitespace
   changes can't alter them.
 - After changing zOS, run the script again and upload the new version.

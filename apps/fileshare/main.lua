@@ -3,6 +3,7 @@
 
 local session = ...
 local ui = require("ui")
+local crypto = require("crypto")
 local net = require("net")
 local share = require("share")
 local system = require("system")
@@ -16,7 +17,7 @@ local function fail(text)
 end
 
 local function myFingerprint()
-    return trust.fingerprint(select(2, trust.identity()))
+    return crypto.fingerprint(select(2, trust.identity()))
 end
 
 local function sizeText(bytes)

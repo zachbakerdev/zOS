@@ -16,7 +16,7 @@ local util = require("util")
 local client = {}
 
 local PORT = 4202 -- must match the mail server's
-local DIR = "/etc/zos/mail-client"
+local OLD_DIR = "/etc/zos/mail-client" -- where zOS 2 kept this
 local TIMEOUT = 15 -- seconds
 local FIND_TIMEOUT = 45 -- seconds; the server may have to look up another server first
 local MAX_BODY = 8192 -- must match the mail server's
@@ -31,7 +31,16 @@ function client.parseAddress(address)
 end
 
 local function path(session)
-    return fs.combine(DIR, session.user)
+    return "/home/" .. session.user .. "/.config/mail/account"
+end
+
+-- Bring over what an older version saved.
+local function migrate(session)
+    local old = fs.combine(OLD_DIR, session.user)
+    if fs.exists(old) and not fs.exists(path(session)) then
+        fs.makeDir(fs.getDir(path(session)))
+        fs.move(old, path(session))
+    end
 end
 
 local function sealingKey(session)
@@ -40,6 +49,7 @@ end
 
 -- The account this user is signed in to, as { user, host, token, secret, public }, if any.
 function client.load(session)
+    migrate(session)
     local key = sealingKey(session)
     local box = key and util.readTable(path(session))
     local plain = box and crypto.open(key, box)

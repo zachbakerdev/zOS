@@ -8,13 +8,21 @@ local util = require("util")
 
 local db = {}
 
-local DIR = "/etc/zos/root-server"
+local DIR = "/etc/root-server"
+local OLD_DIR = "/etc/zos/root-server" -- where zOS 2 kept this
 local KEY = fs.combine(DIR, "key")
 local CONFIG = fs.combine(DIR, "config")
 local REQUESTS = fs.combine(DIR, "requests")
 
 local DAY = 24 * 3600 * 1000
 local MAX_PENDING = 32
+
+-- Bring over what an older version saved. The app and its service both get here, and nothing
+-- here yields, so only the first one moves it.
+if fs.exists(OLD_DIR) and not fs.exists(DIR) then
+    fs.makeDir("/etc")
+    fs.move(OLD_DIR, DIR)
+end
 
 db.DEFAULT_DAYS = 30
 
@@ -59,7 +67,7 @@ db.rename = refreshAdvert
 
 function db.fingerprint()
     local _, public = db.keypair()
-    return trust.fingerprint(public)
+    return crypto.fingerprint(public)
 end
 
 function db.requests()

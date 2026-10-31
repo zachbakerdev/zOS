@@ -4,6 +4,8 @@ package.path = "tests/?.lua;" .. package.path
 
 local sim = require("sim")
 
+local SETTINGS = os.getenv("ZOS_LIB") and "src/.zos/sys/settings.lua" or "disk/payload/zos/sys/settings.lua"
+
 local failed, passed = 0, 0
 local function check(name, ok)
   if ok then
@@ -68,7 +70,7 @@ local function scenario(width)
   local c = sim.computer(1, { width = width, label = "alpha" })
   c.env.require("auth").create("admin", "password1", true)
   c.env.require("auth").create("guest", "password1", false)
-  local settings = runScreen(c, "disk/payload/zos/sys/settings.lua", admin)
+  local settings = runScreen(c, SETTINGS, admin)
   check("settings has a network page", screenHas(c, "Network"))
 
   -- Settings: Change my password, Encryption keys, Users, Secure boot, Network, ...
@@ -106,7 +108,7 @@ local function scenario(width)
   key(root, "enter") -- the root's menu was drawn before the request; opening Requests reads it
   check("pending request listed", screenHas(root, "alpha  [pending]"))
   check("its fingerprint is shown", has(root.screenText(),
-    c.env.require("trust").fingerprint(select(2, c.env.require("trust").identity()))))
+    sim.fingerprint(select(2, c.env.require("trust").identity()))))
   key(root, "enter")
   check("review screen", screenHas(root, "Sign this key?"))
   char(root, "y")
@@ -159,7 +161,7 @@ local function scenario(width)
   check("printed name", has(printed, "alpha"))
   check("printed computer", has(printed, "Computer: 1\n"))
   check("printed dates", has(printed, c.env.os.date("!%Y-%m-%d", math.floor(cert.expires / 1000))))
-  check("printed fingerprint", has(printed, trust.fingerprint(select(2, trust.identity()))))
+  check("printed fingerprint", has(printed, root.env.require("crypto").fingerprint(select(2, trust.identity()))))
   check("printed its key", has(whole, cert.key))
   check("printed the signer", has(printed, "Overworld Root"))
   check("printed the root's fingerprint", has(printed, rootFinger))
@@ -218,7 +220,7 @@ local function scenario(width)
   local guestSession = { user = "guest", admin = false }
   guest.env.require("auth").create("root", "password1", true)
   guest.env.require("auth").create("guest", "password1", false)
-  runScreen(guest, "disk/payload/zos/sys/settings.lua", guestSession)
+  runScreen(guest, SETTINGS, guestSession)
   check("guest settings", screenHas(guest, "Network"))
   pick(guest, 2) -- no Users or Secure boot rows
   check("guest network page", screenHas(guest, "Root servers (0)"))
@@ -230,7 +232,7 @@ local function scenario(width)
   -- no modem
   local lonely = sim.computer(3, { width = width, modems = {} })
   lonely.env.require("auth").create("admin", "password1", true)
-  runScreen(lonely, "disk/payload/zos/sys/settings.lua", admin)
+  runScreen(lonely, SETTINGS, admin)
   screenHas(lonely, "Network")
   pick(lonely, 4)
   screenHas(lonely, "Root servers (0)")

@@ -17,7 +17,8 @@ db.MAX_BODY = 8192
 db.MAX_SUBJECT = 64
 db.MAX_RECIPIENTS = 8
 
-local DIR = "/etc/zos/mail-server"
+local DIR = "/etc/mail-server"
+local OLD_DIR = "/etc/zos/mail-server" -- where zOS 2 kept this
 local CONFIG = fs.combine(DIR, "config")
 local ACCOUNTS = fs.combine(DIR, "accounts")
 local OUTBOX = fs.combine(DIR, "outbox")
@@ -36,6 +37,13 @@ local MAX_FAILURES = 5
 local LOCK = 60000 -- ms
 local POSTMASTER = "postmaster" -- bounces come from here, so nobody can have this account
 local MAX_KNOWN_KEYS = 256
+
+-- Bring over what an older version saved. The app and its service both get here, and nothing
+-- here yields, so only the first one moves it.
+if fs.exists(OLD_DIR) and not fs.exists(DIR) then
+    fs.makeDir("/etc")
+    fs.move(OLD_DIR, DIR)
+end
 
 local failures = {} -- user -> { count, untilMs }
 

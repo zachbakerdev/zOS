@@ -473,7 +473,7 @@ each chunk is sealed with ChaCha20 and HMAC-SHA256. See `apps/fileshare/share.lu
 protocol. Files are only encrypted on their way between computers: they're ordinary files on both
 disks.
 
-The lists in `/etc/zos/fileshare/` belong to the computer, not to a user, so anyone who can log in
+The lists in `/etc/fileshare/` belong to the computer, not to a user, so anyone who can log in
 can change what it shares and who it trusts. Whoever verifies a computer can download everything
 that's shared, since there are no per-file permissions. The file is held in memory at both ends
 during a download.

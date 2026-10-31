@@ -3,6 +3,7 @@
 
 local session = ...
 local ui = require("ui")
+local crypto = require("crypto")
 local db = require("maildb")
 local net = require("net")
 local system = require("system")
@@ -30,7 +31,7 @@ local function waitForHostname(root, host)
         ui.text("Asking " .. root.name .. " for " .. host .. ".")
         ui.text("")
         ui.text("Your fingerprint:", ui.theme.dim)
-        ui.text(trust.fingerprint(select(2, trust.identity())), ui.theme.accent)
+        ui.text(crypto.fingerprint(select(2, trust.identity())), ui.theme.accent)
         ui.text("")
         local status, err = net.requestCertificate(root, host)
         if status == "issued" then
@@ -63,7 +64,7 @@ local function chooseRoot()
     end
     if #roots == 1 then return roots[1] end
     local items = {}
-    for _, root in ipairs(roots) do items[#items + 1] = { label = root.name, hint = root.fingerprint } end
+    for _, root in ipairs(roots) do items[#items + 1] = { label = root.name, hint = crypto.fingerprint(crypto.fromHex(root.key)) } end
     items[#items + 1] = { label = "Back", fg = ui.theme.dim }
     local selected = ui.menu({ title = TITLE .. " - Choose a root server", items = items, back = true })
     return selected and roots[selected]
@@ -99,7 +100,7 @@ local function hostnameDetails()
     local action = ui.pager(TITLE .. " - " .. host, "Hostname: " .. host .. "\nComputer: " .. os.getComputerID() ..
         "\nRoot server: " .. (root and root.name or "no longer trusted") ..
         "\nCertificate: " .. daysLeft(cert) .. " days left, renewed by itself\n\nFingerprint:\n" ..
-        trust.fingerprint(select(2, trust.identity())), "C: change hostname  Q: back", { c = "change" })
+        crypto.fingerprint(select(2, trust.identity())), "C: change hostname  Q: back", { c = "change" })
     if action == "change" then
         ui.screen(TITLE)
         ui.text("Everyone's address here changes with it, and mail to the old one will bounce.", ui.theme.bad)

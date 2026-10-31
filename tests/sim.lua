@@ -3,7 +3,8 @@
 
 require("cc_shim")
 
-local LIB = "disk/payload/zos/lib/"
+-- ZOS_LIB=src/.zos/lib/ runs the apps on the new system libraries.
+local LIB = os.getenv("ZOS_LIB") or "disk/payload/zos/lib/"
 
 local sim = { computers = {}, wire = {}, onPacket = nil }
 local clock = 1700000000000
@@ -16,6 +17,10 @@ local function copy(v)
   return out
 end
 sim.copy = copy
+
+function sim.fingerprint(key)
+  return next(sim.computers) and select(2, next(sim.computers)).env.require("crypto").fingerprint(key)
+end
 
 local function serialize(v)
   if type(v) == "string" then return string.format("%q", v) end

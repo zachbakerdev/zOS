@@ -41,7 +41,7 @@ when installing, so raise `minZos` before people need it, not after.
 - `require` finds the app's own modules first (`require("helper")` loads `helper.lua` from the
   app folder), then the zOS libraries (`ui`, `auth`, `keys`, `crypto`, `net`, `trust`, `system`, `apps`, ...).
 - Installing a new version replaces the app's folder, so keep data somewhere else, such as
-  `/home/<user>/` or `/etc/zos/<id>/`.
+  `/etc/<id>/` or `/home/<user>/.config/<id>/`. See `specs/APP_STANDARDS.md`.
 
 ## Packaging
 

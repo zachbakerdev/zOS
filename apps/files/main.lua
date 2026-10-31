@@ -20,9 +20,8 @@ local function status() return show(cwd) end
 -- Deleting or moving these can stop zOS from booting, or lose its users and keys.
 local function isSystem(path)
     return path == "startup.lua" or path == ".settings" or path == "etc"
-        or path == "zos" or path:match("^zos/") ~= nil
+        or path == ".zos" or path:match("^%.zos/") ~= nil
         or path == "etc/zos" or path:match("^etc/zos/") ~= nil
-        or path == "apps" or path:match("^apps/") ~= nil
 end
 
 -- Turn user input into a path, relative to the current folder unless it starts with "/".

@@ -70,7 +70,7 @@ do
 
   local hello = sim.call(a, function() return shareOf(a).hello(2) end)
   local trustB = b.env.require("trust")
-  check("hello shows the real fingerprint", hello.fingerprint, trustB.fingerprint(select(2, trustB.identity())))
+  check("hello shows the real fingerprint", hello.fingerprint, b.env.require("crypto").fingerprint(select(2, trustB.identity())))
   check("hello doesn't trust anyone by itself", shareOf(a).isTrusted(hello.key), false)
 end
 reset()
@@ -324,7 +324,7 @@ do
   a.files["home/me/a.txt"] = "x"
   a.files["other/a.txt"] = "y"
   a.files["etc/zos/net/identity"] = "seed"
-  a.files["zos/boot.lua"] = "x"
+  a.files[".zos/boot.lua"] = "x"
   a.files["home/me/.secret"] = "x"
   a.files["startup.lua"] = "x"
   local s = shareOf(a)
@@ -334,7 +334,7 @@ do
     check(label .. " says why", has(why, text))
   end
   refused("/etc/zos/net/identity", "can't be shared", "identity key")
-  refused("zos/boot.lua", "can't be shared", "system file")
+  refused(".zos/boot.lua", "can't be shared", "system file")
   refused("/ETC/zos/net/identity", "can't be shared", "other case")
   refused("startup.lua", "can't be shared", "startup")
   refused("/home/me", "single files", "folder")
@@ -395,7 +395,7 @@ do
   check("asks for an id", screenHas(b, "Computer id"))
   line(b, "1")
   local trustA = a.env.require("trust")
-  local fingerA = trustA.fingerprint(select(2, trustA.identity()))
+  local fingerA = sim.fingerprint(select(2, trustA.identity()))
   check("shows a's fingerprint", screenHas(b, fingerA))
   char(b, "y")
   check("verified", screenHas(b, "is verified"))
@@ -431,6 +431,20 @@ do
   check("file arrived", a.files["home/me/downloads/map.txt"], b.files["home/me/map.txt"])
 end
 
+reset()
+
+-- Data from older versions --------------------------------------------------------
+
+do
+  local c = sim.computer(70)
+  c.files["etc/zos/fileshare/peers"] = "peers"
+  c.files["etc/zos/fileshare/files"] = "files"
+  c.appDir = "apps/fileshare/"
+  c.env.require("share")
+  check("trusted computers moved", c.files["etc/fileshare/peers"], "peers")
+  check("shared files moved", c.files["etc/fileshare/files"], "files")
+  check("nothing left in /etc/zos", c.files["etc/zos/fileshare/peers"], nil)
+end
 reset()
 
 if failed > 0 then

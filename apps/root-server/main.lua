@@ -58,7 +58,7 @@ end
 
 local function showRequest(entry)
     return "Name: " .. entry.name .. "\nComputer: " .. tostring(entry.from) .. "\n\nFingerprint:\n" ..
-        trust.fingerprint(crypto.fromHex(entry.key)) .. "\n\nStatus: " .. entry.status
+        crypto.fingerprint(crypto.fromHex(entry.key)) .. "\n\nStatus: " .. entry.status
 end
 
 local function reviewPending(entry)
@@ -66,7 +66,7 @@ local function reviewPending(entry)
     ui.text("Computer " .. tostring(entry.from) .. " wants to be '" .. entry.name .. "'.")
     ui.text("")
     ui.text("Fingerprint:", ui.theme.dim)
-    ui.text(trust.fingerprint(crypto.fromHex(entry.key)), ui.theme.accent)
+    ui.text(crypto.fingerprint(crypto.fromHex(entry.key)), ui.theme.accent)
     ui.text("")
     ui.text("Approve this only if computer " .. tostring(entry.from) .. " itself shows the same " ..
         "fingerprint in Settings > Network, and you're sure it deserves this name.", ui.theme.dim)
@@ -119,7 +119,7 @@ local function requests()
         for _, entry in ipairs(list) do
             items[#items + 1] = {
                 label = entry.name .. "  [" .. entry.status .. "]",
-                hint = trust.fingerprint(crypto.fromHex(entry.key)),
+                hint = crypto.fingerprint(crypto.fromHex(entry.key)),
                 fg = entry.status == "pending" and ui.theme.accent or
                     (entry.status == "issued" and ui.theme.fg or ui.theme.dim),
             }

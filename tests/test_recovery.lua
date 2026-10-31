@@ -368,5 +368,77 @@ do
   check("a certificate for another computer doesn't", next(trust.namesFor(certs, 3, peer)) == nil)
 end
 
+-- .za images ------------------------------------------------------------------------------------
+
+-- An image's files can only land in its own app folder. What its code does once it runs is
+-- another matter: see Security in specs/formats/ZA_FORMAT.md.
+
+local function appImage(id, extra)
+  local contents = {
+    ["za:metadata"] = { version = 1, id = id },
+    ["app.manifest"] = '{ name = "Notes", version = "1.0" }',
+    ["main.lua"] = "return 1",
+  }
+  for path, data in pairs(extra or {}) do contents[path] = data end
+  return serialize(contents)
+end
+
+do
+  local apps = computer().env.require("apps")
+
+  check("a normal image parses", apps.parse(appImage("notes", { ["lib/store.lua"] = "return {}" })))
+
+  local badPaths = {
+    "../other/x.lua", "../../boot.lua", "../../lib/util.lua", "../../../startup.lua",
+    "lib/../main.lua", "lib/../../../boot.lua", "a/..", "..", ".", "./main.lua",
+    "/main.lua", "/.zos/boot.lua", "/startup.lua", "/etc/zos/users",
+    ".hidden", "lib/.hidden", ".zos/boot.lua", "a//b", "a/", "/", "",
+    "lib\\main.lua", "..\\boot.lua", "C:/boot.lua", "a b", "a\nb", string.rep("a", 129),
+  }
+  for _, path in ipairs(badPaths) do
+    local pkg, err = apps.parse(appImage("notes", { [path] = "return 1" }))
+    check("za path refused: " .. path, pkg == nil and tostring(err):find("bad file name", 1, true) ~= nil)
+  end
+  check("za path refused: a number", apps.parse(appImage("notes", { [1] = "return 1" })) == nil)
+  check("za file refused: not a string", apps.parse(appImage("notes", { ["data"] = { "x" } })) == nil)
+
+  local badIds = {
+    "..", ".", "../lib", "../../etc", "a/b", "/lib", "a.b", ".hidden", "", "zos", "Notes", "a b",
+    string.rep("a", 33), 7,
+  }
+  for _, id in ipairs(badIds) do
+    local pkg, err = apps.parse(appImage(id))
+    check("za id refused: " .. tostring(id), pkg == nil and tostring(err):find("invalid id", 1, true) ~= nil)
+  end
+
+  check("a file can't also be a folder", apps.parse(appImage("notes", { lib = "x", ["lib/a"] = "y" })) == nil)
+end
+
+do -- installing writes only to the app's folder
+  local system = {
+    [".zos/boot.lua"] = "-- boot", [".zos/lib/util.lua"] = "-- util", [".zos/sys/login.lua"] = "-- login",
+    [".zos/apps/other/main.lua"] = "-- other", [".zos/apps/notes/old.lua"] = "-- old version",
+    ["startup.lua"] = "-- startup", ["etc/zos/users"] = "{}",
+  }
+  local c = computer({})
+  for path, data in pairs(system) do c.files[path] = data end
+  local apps = c.env.require("apps")
+
+  local pkg = assert(apps.parse(appImage("notes", { ["lib/store.lua"] = "return {}" })))
+  check("za install works", apps.install(pkg))
+
+  for path, data in pairs(system) do
+    if path ~= ".zos/apps/notes/old.lua" then
+      check("za install leaves " .. path .. " alone", c.files[path] == data)
+    end
+  end
+  for path in pairs(c.files) do
+    check("za install wrote nothing else: " .. path,
+      system[path] ~= nil or path:sub(1, #".zos/apps/notes/") == ".zos/apps/notes/")
+  end
+  check("za install put the files in place", c.files[".zos/apps/notes/lib/store.lua"] == "return {}")
+  check("za install replaced the old version", c.files[".zos/apps/notes/old.lua"] == nil)
+end
+
 print(("%d passed, %d failed"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -22,11 +22,11 @@ local function dateText(ms)
     return os.date("!%Y-%m-%d %H:%M", math.floor(ms / 1000))
 end
 
--- Run an operation with a message on screen. Drops the account if the server no longer accepts it.
-local function call(op, fields, text)
+-- Run something with a message on screen. Drops the account if the server no longer accepts it.
+local function attempt(text, action)
     ui.screen(TITLE)
-    ui.text(text or "Talking to the server...", ui.theme.dim)
-    local answer, err, expired = client.call(account, op, fields)
+    ui.text(text, ui.theme.dim)
+    local answer, err, expired = action()
     if not answer then
         if expired then
             client.forget(session)
@@ -35,6 +35,10 @@ local function call(op, fields, text)
         fail(err)
     end
     return answer
+end
+
+local function call(op, fields)
+    return attempt("Talking to the server...", function() return client.call(account, op, fields) end)
 end
 
 ------------------------------------------------------------------------------
@@ -62,7 +66,8 @@ local function compose(to, subject, quoted)
     if quoted then lines[#lines + 1] = "\n" .. quoted end
     ui.text("")
     if not ui.confirm("Send it?") then return end
-    if call("send", { to = splitAddresses(to), subject = subject, body = table.concat(lines, "\n") }, "Sending...") then
+    local body = table.concat(lines, "\n")
+    if attempt("Encrypting and sending...", function() return client.send(account, splitAddresses(to), subject, body) end) then
         ui.message(TITLE, "Sent. Mail that can't be delivered comes back to your inbox.", ui.theme.good)
     end
 end
@@ -83,6 +88,10 @@ local function readMessage(entry)
     local answer = call("read", { id = entry.id })
     if not answer then return end
     local message = answer.message
+    ui.screen(TITLE)
+    ui.text("Decrypting...", ui.theme.dim)
+    message.body = client.decrypt(account, message) or
+        "(This message can't be decrypted. It was encrypted with a key from before this account's password was reset.)"
     local text = "From: " .. message.from .. "\nTo: " .. table.concat(message.to, ", ") .. "\nDate: " ..
         dateText(message.date) .. "\nSubject: " .. message.subject .. "\n\n" .. message.body
     local action = ui.pager(TITLE .. " - " .. message.subject, text, "R: reply  D: delete  Q: back",
@@ -140,13 +149,21 @@ end
 
 local function changePassword()
     ui.screen(TITLE)
+    local old = ui.input("Current password", "*")
     local password = ui.input("New password", "*")
     ui.text("Changing the password...", ui.theme.dim)
-    local ok, err = client.changePassword(session, account, password)
+    local ok, err = client.changePassword(session, account, old, password)
     if ok then
         ui.message(TITLE, "Password changed. Other computers will have to sign in again.", ui.theme.good)
     else
         fail(err)
+    end
+end
+
+local function downloadKey()
+    local file = attempt("Downloading your key...", function() return client.downloadCertificate(session, account) end)
+    if file then
+        ui.message(TITLE, "Saved to " .. file .. ". It's locked with your current password.", ui.theme.good)
     end
 end
 
@@ -165,6 +182,7 @@ while true do
             { label = "Inbox", action = inbox, hint = "Read your mail" },
             { label = "New message", action = function() compose() end, hint = "Write to anyone with an address" },
             { label = "Change password", action = changePassword },
+            { label = "Download key", action = downloadKey, hint = "Your encrypted mail key, as a file" },
             { label = "Sign out", action = signOut, hint = "Forget this account on this computer" },
             { label = "Back", fg = ui.theme.dim },
         }

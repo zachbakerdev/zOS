@@ -1,6 +1,10 @@
 -- The mail server's accounts, mailboxes and outgoing queue. Kept in files because the app and its
 -- service each load their own copy of this module, and both change them. Hashing and signing
 -- yield, so nothing here holds a table it read before one of those and writes it back after.
+--
+-- Bodies are never here in the clear. An account's secret key is kept locked with its password,
+-- and whoever sends a message seals it with a new key, which only the recipient's secret key can
+-- get back. Addresses, subjects and dates are not encrypted, since servers need them.
 
 local crypto = require("crypto")
 local trust = require("trust")
@@ -18,6 +22,7 @@ local CONFIG = fs.combine(DIR, "config")
 local ACCOUNTS = fs.combine(DIR, "accounts")
 local OUTBOX = fs.combine(DIR, "outbox")
 local BOXES = fs.combine(DIR, "boxes")
+local KEYS = fs.combine(DIR, "keys") -- public keys of accounts on other servers
 
 local ITERATIONS = 200
 local MIN_PASSWORD = 8
@@ -30,6 +35,7 @@ local RESERVE = 8192 -- bytes of disk kept free for the indexes
 local MAX_FAILURES = 5
 local LOCK = 60000 -- ms
 local POSTMASTER = "postmaster" -- bounces come from here, so nobody can have this account
+local MAX_KNOWN_KEYS = 256
 
 local failures = {} -- user -> { count, untilMs }
 
@@ -39,6 +45,10 @@ end
 
 local function hex(n)
     return crypto.toHex(crypto.randomBytes(n))
+end
+
+local function boxPath(user, name)
+    return fs.combine(fs.combine(BOXES, user), name)
 end
 
 function db.config()
@@ -88,16 +98,36 @@ local function cleanLine(text, limit)
     return (text:gsub("%c", " ")):sub(1, limit)
 end
 
-local function cleanBody(text)
-    return (text:gsub("\r\n?", "\n"):gsub("[%z\1-\8\11-\31\127]", "")):sub(1, db.MAX_BODY)
+local function cleanBox(box, limit)
+    if type(box) == "table" and crypto.isHex(box.nonce, 24) and crypto.isHex(box.ct) and #box.ct <= limit
+            and crypto.isHex(box.tag, 64) then
+        return { nonce = box.nonce, ct = box.ct, tag = box.tag }
+    end
 end
 
--- A copy of a message with only the expected fields, or nil. Its id goes in a path.
+-- A message's key, sealed to one recipient.
+local function cleanKey(box)
+    local clean = cleanBox(box, 64)
+    if clean and crypto.isHex(box.eph, 64) then
+        clean.eph = box.eph
+        return clean
+    end
+end
+
+-- A copy of a message with only the expected fields, or nil. Its id goes in a path. The body can't
+-- be checked here, so Mail cleans it after decrypting it.
 function db.cleanMessage(message)
-    if type(message) ~= "table" or type(message.subject) ~= "string" or type(message.body) ~= "string"
-            or type(message.from) ~= "string" or type(message.to) ~= "table" or not crypto.isHex(message.id, 32)
-            or #message.body > db.MAX_BODY then
+    if type(message) ~= "table" or type(message.subject) ~= "string" or type(message.from) ~= "string"
+            or type(message.to) ~= "table" or type(message.keys) ~= "table" or not crypto.isHex(message.id, 32) then
         return nil
+    end
+    local body = cleanBox(message.body, 2 * db.MAX_BODY)
+    if not body then return nil end
+    local keys, count = {}, 0
+    for user, box in pairs(message.keys) do
+        count = count + 1
+        if count > db.MAX_RECIPIENTS then return nil end
+        if db.validUser(user) then keys[user] = cleanKey(box) end
     end
     local to = {}
     for i = 1, math.min(#message.to, db.MAX_RECIPIENTS) do
@@ -105,7 +135,7 @@ function db.cleanMessage(message)
     end
     return {
         id = message.id, from = cleanLine(message.from, 48), to = to,
-        subject = cleanLine(message.subject, db.MAX_SUBJECT), body = cleanBody(message.body), date = now(),
+        subject = cleanLine(message.subject, db.MAX_SUBJECT), body = body, keys = keys, date = now(),
     }
 end
 
@@ -125,6 +155,14 @@ local function derive(password, salt)
     local h = crypto.sha256(salt .. password)
     for _ = 2, ITERATIONS do h = crypto.sha256(h .. salt .. password) end
     return h
+end
+
+-- A new key pair, with the secret key locked by the password. The salt isn't the one the login
+-- hash uses, and neither is the derivation, so that hash doesn't open the key.
+local function newKey(password)
+    crypto.addEntropy(password)
+    local secret, public = crypto.keypair()
+    return { public = crypto.toHex(public), locked = crypto.lock(password, secret) }
 end
 
 -- Every account name, sorted.
@@ -151,22 +189,26 @@ function db.createAccount(user, password)
 
     local salt = hex(16)
     local hash = derive(password, salt)
+    local key = newKey(password)
     local accounts = loadAccounts()
     if accounts[user] then return nil, "That name is taken." end
-    accounts[user] = { salt = salt, hash = hash, tokens = {}, created = now() }
+    accounts[user] = { salt = salt, hash = hash, key = key, sealed = true, tokens = {}, created = now() }
     saveAccounts(accounts)
     return true
 end
 
+-- For an admin, who doesn't know the old password, so nothing can open the old secret key. The
+-- account gets a new one, and mail already in the mailbox can no longer be read.
 function db.setPassword(user, password)
     if type(password) ~= "string" or #password < MIN_PASSWORD then
         return nil, "Passwords must be at least " .. MIN_PASSWORD .. " characters."
     end
     local salt = hex(16)
     local hash = derive(password, salt)
+    local key = newKey(password)
     local accounts = loadAccounts()
     if not accounts[user] then return nil, "There's no such account." end
-    accounts[user].salt, accounts[user].hash, accounts[user].tokens = salt, hash, {}
+    accounts[user].salt, accounts[user].hash, accounts[user].key, accounts[user].tokens = salt, hash, key, {}
     saveAccounts(accounts)
     return true
 end
@@ -214,6 +256,31 @@ local function newToken(user)
     return token
 end
 
+-- Accounts from before mail was encrypted get their key at their next sign-in, the first time the
+-- password is here, and what's in their mailbox is sealed then. One key does for all of it, because
+-- sealing to a public key is slow and someone is waiting to sign in.
+local function upgrade(user, password)
+    local account = loadAccounts()[user]
+    local cert = account.key or newKey(password)
+    local accounts = loadAccounts()
+    accounts[user].key = cert
+    saveAccounts(accounts)
+
+    local key = crypto.randomBytes(32)
+    local sealed = crypto.sealTo(crypto.fromHex(cert.public), key)
+    for _, entry in ipairs(db.index(user)) do
+        local path = boxPath(user, entry.id)
+        local message = util.readTable(path)
+        if message and type(message.body) == "string" then
+            message.body, message.key = crypto.seal(key, message.body), sealed
+            util.writeTable(path, message)
+        end
+    end
+    accounts = loadAccounts()
+    accounts[user].sealed = true
+    saveAccounts(accounts)
+end
+
 -- Swap a password for a token. Returns the token, or nil and a reason.
 function db.login(user, password)
     if type(user) ~= "string" or type(password) ~= "string" then return nil, "Wrong account or password." end
@@ -225,7 +292,67 @@ function db.login(user, password)
         return nil, "Wrong account or password."
     end
     failures[user] = nil
+    if not account.sealed then upgrade(user, password) end
     return newToken(user)
+end
+
+-- The owner changing their own password. Their secret key stays the same, locked with the new one.
+function db.changePassword(user, old, new)
+    if type(new) ~= "string" or #new < MIN_PASSWORD then
+        return nil, "Passwords must be at least " .. MIN_PASSWORD .. " characters."
+    end
+    if type(old) ~= "string" then return nil, "That isn't your password." end
+    if lockedOut(user) then return nil, "Too many wrong passwords. Try again in a minute." end
+    local account = loadAccounts()[user]
+    if not account then return nil, "There's no such account." end
+    if derive(old, account.salt) ~= account.hash then
+        failed(user)
+        return nil, "That isn't your password."
+    end
+    failures[user] = nil
+    if not account.key then return db.setPassword(user, new) end
+
+    local secret = crypto.unlock(old, account.key.locked)
+    if not secret then return nil, "Your key can't be decrypted with this password." end
+    local locked = crypto.lock(new, secret)
+    local salt = hex(16)
+    local hash = derive(new, salt)
+    local accounts = loadAccounts()
+    if not accounts[user] then return nil, "There's no such account." end
+    accounts[user].salt, accounts[user].hash, accounts[user].tokens = salt, hash, {}
+    accounts[user].key.locked = locked
+    saveAccounts(accounts)
+    return true
+end
+
+-- An account's public key and its locked secret key, as { public, locked }. Useless without the
+-- password, so it's given to the account's owner to open.
+function db.certificate(user)
+    local account = loadAccounts()[user]
+    return account and account.key
+end
+
+-- An account's public key, in hex, or nil and a reason.
+function db.publicKey(user)
+    local account = loadAccounts()[user]
+    if not account then return nil, "no such account" end
+    if not account.key then return nil, "this account has to sign in again before it can get mail" end
+    return account.key.public
+end
+
+-- What other servers said about their accounts, so that mail can still be queued while they're away.
+function db.knownKey(address)
+    return (util.readTable(KEYS) or {})[address]
+end
+
+function db.rememberKey(address, key)
+    local known = util.readTable(KEYS) or {}
+    if known[address] == key then return end
+    local count = 0
+    for _ in pairs(known) do count = count + 1 end
+    if count >= MAX_KNOWN_KEYS then known = {} end
+    known[address] = key
+    util.writeTable(KEYS, known)
 end
 
 function db.checkToken(user, token)
@@ -249,10 +376,6 @@ end
 -- Mailboxes
 ------------------------------------------------------------------------------
 
-local function boxPath(user, name)
-    return fs.combine(fs.combine(BOXES, user), name)
-end
-
 -- One account's messages without their bodies, newest first.
 function db.index(user)
     return util.readTable(boxPath(user, "index")) or {}
@@ -270,15 +393,22 @@ function db.store(user, message)
     for _, entry in ipairs(index) do
         if entry.id == message.id then return true end
     end
+    local key = message.keys[user]
+    if not key then return nil, "not sealed for this account" end
     if #index >= MAX_MAILBOX then return nil, "mailbox full" end
     local dir = fs.combine(BOXES, user)
     fs.makeDir(dir)
-    if #message.body + RESERVE > fs.getFreeSpace(dir) then return nil, "server out of space" end
+    local size = #message.body.ct / 2
+    if size + RESERVE > fs.getFreeSpace(dir) then return nil, "server out of space" end
 
-    util.writeTable(boxPath(user, message.id), message)
+    -- A recipient only gets their own copy of the message's key.
+    util.writeTable(boxPath(user, message.id), {
+        id = message.id, from = message.from, to = message.to, subject = message.subject, date = message.date,
+        body = message.body, key = key,
+    })
     table.insert(index, 1, {
         id = message.id, from = message.from, subject = message.subject, date = message.date,
-        size = #message.body, read = false,
+        size = size, read = false,
     })
     saveIndex(user, index)
     return true
@@ -346,34 +476,42 @@ function db.updateQueued(id, changes)
     end
 end
 
--- Tell a sender here that their mail couldn't be delivered.
+-- Tell a sender here that their mail couldn't be delivered. This server can't read the message,
+-- so it can't quote it.
 function db.bounce(message, recipients, why)
     local user, host = message.from:match("^([^@]+)@(.+)$")
-    if not user or user == POSTMASTER then return end
+    local public = user and user ~= POSTMASTER and db.publicKey(user)
+    if not public then return end
+    local key = crypto.randomBytes(32)
     db.store(user, db.cleanMessage({
         id = hex(16), from = POSTMASTER .. "@" .. host, to = { message.from },
         subject = "Undeliverable: " .. message.subject,
-        body = "This message couldn't be delivered to " .. table.concat(recipients, ", ") .. ":\n\n" .. why ..
-            "\n\n---\n" .. message.body:sub(1, db.MAX_BODY - 1024),
+        body = crypto.seal(key, "This message couldn't be delivered to " .. table.concat(recipients, ", ") ..
+            ":\n\n" .. why),
+        keys = { [user] = crypto.sealTo(crypto.fromHex(public), key) },
     }))
 end
 
 -- Accept a message from an account here. Nothing is sent unless every recipient is usable, so
 -- that a typo can't leave a message half delivered. Returns the id, or nil and a reason.
-function db.submit(user, to, subject, body)
+-- `body` is sealed with a new key, and `keys` has that key sealed to each address in `to`.
+function db.submit(user, to, subject, body, keys)
     local host = db.hostname()
     if not host then return nil, "This server has no hostname." end
     if type(to) ~= "table" or #to == 0 then return nil, "Say who it's for." end
     if #to > db.MAX_RECIPIENTS then return nil, "Up to " .. db.MAX_RECIPIENTS .. " recipients." end
-    if type(subject) ~= "string" or type(body) ~= "string" then return nil, "That message is malformed." end
-    if #body > db.MAX_BODY then return nil, "Messages are up to " .. db.MAX_BODY .. " bytes." end
+    if type(subject) ~= "string" or type(keys) ~= "table" then return nil, "That message is malformed." end
 
     local here, there, hosts = {}, {}, 0
-    local addresses = {}
+    local addresses, sealed = {}, {}
     for _, address in ipairs(to) do
         local name, target = db.parseAddress(address, host)
         if not name then return nil, "'" .. tostring(address) .. "' isn't an address, like bob@zmail.root-a." end
         addresses[#addresses + 1] = name .. "@" .. target
+        local key = cleanKey(keys[addresses[#addresses]])
+        if not key then return nil, "That message is malformed." end
+        sealed[target] = sealed[target] or {}
+        sealed[target][name] = key
         if target == host then
             if not db.exists(name) then return nil, "There's no account called " .. name .. " here." end
             here[#here + 1] = name
@@ -385,13 +523,18 @@ function db.submit(user, to, subject, body)
     if #db.outbox() + hosts > MAX_OUTBOX then return nil, "Too much mail is waiting to go out. Try again later." end
 
     local message = db.cleanMessage({
-        id = hex(16), from = user .. "@" .. host, to = addresses, subject = subject, body = body,
+        id = hex(16), from = user .. "@" .. host, to = addresses, subject = subject, body = body, keys = {},
     })
+    if not message then return nil, "That message is malformed." end
+    message.keys = sealed[host] or {}
     for _, name in ipairs(here) do
         local ok, why = db.store(name, message)
         if not ok then db.bounce(message, { name .. "@" .. host }, why) end
     end
-    for target, users in pairs(there) do db.queue(target, users, message) end
+    for target, users in pairs(there) do
+        message.keys = sealed[target]
+        db.queue(target, users, message)
+    end
     return message.id
 end
 

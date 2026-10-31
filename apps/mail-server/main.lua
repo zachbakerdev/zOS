@@ -127,7 +127,7 @@ local function manageAccount(user)
     local box = db.index(user)
     local host = db.hostname()
     local items = {
-        { label = "Reset password", hint = "Signs it out everywhere" },
+        { label = "Reset password", hint = "Signs it out, and its mail so far can't be read", fg = ui.theme.bad },
         { label = "Delete account", hint = "Deletes its mail too", fg = ui.theme.bad },
         { label = "Back", fg = ui.theme.dim },
     }
@@ -135,6 +135,10 @@ local function manageAccount(user)
     local choice = ui.menu({ title = title, items = items, back = true })
     if choice == 1 then
         ui.screen(TITLE)
+        ui.text("Mail is encrypted with a key that only the old password opens, so resetting it gives " ..
+            user .. " a new key. The " .. #box .. " messages here will stay unreadable.", ui.theme.bad)
+        ui.text("")
+        if not ui.confirm("Reset the password?") then return end
         local password = ui.input("New password", "*")
         ui.text("Changing the password...", ui.theme.dim)
         local ok, err = db.setPassword(user, password)

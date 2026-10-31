@@ -825,6 +825,8 @@ function crypto.keypair()
   return sk, crypto.publicKey(sk)
 end
 
+local PASSWORD_ITERATIONS = 200
+
 local function subkeys(key)
   return crypto.hmac(key, "zos-enc"), crypto.hmac(key, "zos-mac")
 end
@@ -851,6 +853,52 @@ function crypto.open(key, box)
     return nil
   end
   return crypto.chacha20(encKey, nonce, ct)
+end
+
+local function sealingKey(secret, eph, publicKey)
+  return crypto.hmac(secret, "zos-sealed|" .. eph .. publicKey)
+end
+
+-- Encrypt for the holder of a secret key, using a new key that's thrown away, so whoever did this
+-- can't read it back. It doesn't say who it's from. Returns nil for a low-order public key.
+function crypto.sealTo(publicKey, plaintext)
+  local sk, eph = crypto.keypair()
+  local secret = crypto.x25519(sk, publicKey)
+  if secret == string.rep("\0", 32) then
+    return nil
+  end
+  local box = crypto.seal(sealingKey(secret, eph, publicKey), plaintext)
+  box.eph = crypto.toHex(eph)
+  return box
+end
+
+function crypto.openSealed(secretKey, publicKey, box)
+  if type(box) ~= "table" or not crypto.isHex(box.eph, 64) then
+    return nil
+  end
+  local eph = crypto.fromHex(box.eph)
+  return crypto.open(sealingKey(crypto.x25519(secretKey, eph), eph, publicKey), box)
+end
+
+local function passwordKey(password, salt)
+  local h = sha256("zos-locked|" .. salt .. "|" .. password)
+  for _ = 2, PASSWORD_ITERATIONS do
+    h = sha256(h .. salt .. password)
+  end
+  return crypto.fromHex(h)
+end
+
+-- Encrypt with a password. What comes back is safe to hand to anyone who doesn't know it.
+function crypto.lock(password, plaintext)
+  local salt = crypto.toHex(crypto.randomBytes(16))
+  return { salt = salt, box = crypto.seal(passwordKey(password, salt), plaintext) }
+end
+
+function crypto.unlock(password, locked)
+  if type(password) ~= "string" or type(locked) ~= "table" or type(locked.salt) ~= "string" then
+    return nil
+  end
+  return crypto.open(passwordKey(password, locked.salt), locked.box)
 end
 
 function crypto.fingerprint(publicKey)

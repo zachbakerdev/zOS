@@ -115,7 +115,33 @@ local function op(c, signedIn, name, fields)
 end
 
 local function send(c, signedIn, to, subject, body)
-  return op(c, signedIn, "send", { to = to, subject = subject, body = body })
+  return sim.call(c, function() return c.client.send(signedIn, to, subject, body) end, 120)
+end
+
+-- Read a stored message the way its owner would.
+local function bodyOf(server, user, id, password)
+  local crypto = cryptoOf(server)
+  return sim.call(server, function()
+    local cert = server.db.certificate(user)
+    local message = server.db.open(user, id)
+    local key = crypto.openSealed(crypto.unlock(password or "correct horse", cert.locked),
+      crypto.fromHex(cert.public), message.key)
+    return key and crypto.open(key, message.body)
+  end)
+end
+
+-- A message as a client would seal it for accounts on `server`.
+local function sealed(server, fields, users, password)
+  local crypto = cryptoOf(server)
+  return sim.call(server, function()
+    local key = crypto.randomBytes(32)
+    local message = sim.copy(fields)
+    message.body, message.keys = crypto.seal(key, fields.body or ""), {}
+    for _, user in ipairs(users) do
+      message.keys[user] = crypto.sealTo(crypto.fromHex(server.db.publicKey(user)), key)
+    end
+    return message
+  end)
 end
 
 local function inbox(server, user)
@@ -328,6 +354,21 @@ do
   check("bad address", select(2, signIn(c, "alice")) ~= nil)
 
   local signedIn = assert(signIn(c, "alice@zmail.root-a"))
+  local mailKey = signedIn.secret
+  check("key came down with the sign-in", cryptoOf(c).publicKey(signedIn.secret), signedIn.public)
+  check("the server only has it locked", has(server.files["etc/zos/mail-server/accounts"], cryptoOf(c).toHex(mailKey)), false)
+  check("saved key is sealed", has(c.files["etc/zos/mail-client/me"], cryptoOf(c).toHex(mailKey)), false)
+  check("key is back after a restart", c.client.load(c.session).secret, mailKey)
+  check("download", sim.call(c, function() return c.client.downloadCertificate(c.session, signedIn) end, 120),
+    "/home/me/alice@zmail.root-a.key")
+  local cert = c.env.require("util").readTable("/home/me/alice@zmail.root-a.key")
+  check("download is locked", cert.locked ~= nil and not has(c.files["home/me/alice@zmail.root-a.key"], cryptoOf(c).toHex(mailKey)))
+  check("download opens with the password", sim.call(c, function() return cryptoOf(c).unlock("correct horse", cert.locked) end), mailKey)
+  check("download doesn't open without it", sim.call(c, function() return cryptoOf(c).unlock("guess", cert.locked) end), nil)
+  check("the login hash doesn't open the key", sim.call(server, function()
+    local stored = server.env.require("util").readTable("/etc/zos/mail-server/accounts").alice
+    return cryptoOf(server).open(cryptoOf(server).fromHex(stored.hash), stored.key.locked.box)
+  end), nil)
   check("token isn't the hash stored", server.files["etc/zos/mail-server/accounts"]:find(signedIn.token, 1, true), nil)
   check("password isn't stored", has(server.files["etc/zos/mail-server/accounts"], "correct horse"), false)
   check("saved token is sealed", has(c.files["etc/zos/mail-client/me"], signedIn.token), false)
@@ -357,11 +398,20 @@ do
 
   -- password change signs everything else out
   local second = assert(signIn(c, "alice@zmail.root-a"))
-  check("change password", sim.call(c, function() return c.client.changePassword(c.session, signedIn, "a new password") end))
+  local publicBefore = server.db.certificate("alice").public
+  local lockedBefore = sim.copy(server.db.certificate("alice").locked)
+  nope, why = sim.call(c, function() return c.client.changePassword(c.session, signedIn, "not it", "a new password") end)
+  check("needs the current password", nope, nil)
+  check("says so", has(why, "isn't your password"))
+  check("change password", sim.call(c, function() return c.client.changePassword(c.session, signedIn, "correct horse", "a new password") end))
+  check("public key stays", server.db.certificate("alice").public, publicBefore)
+  check("key is locked again", server.db.certificate("alice").locked.salt ~= lockedBefore.salt)
+  check("old password doesn't open it", sim.call(c, function() return cryptoOf(c).unlock("correct horse", server.db.certificate("alice").locked) end), nil)
+  check("new password does", sim.call(c, function() return cryptoOf(c).unlock("a new password", server.db.certificate("alice").locked) end), mailKey)
   check("new token works", op(c, signedIn, "list") ~= nil)
   check("old devices are out", (op(c, second, "list")), nil)
   check("old password is out", (signIn(c, "alice@zmail.root-a")), nil)
-  check("new password works", signIn(c, "alice@zmail.root-a", "a new password") ~= nil)
+  check("new password works", signIn(c, "alice@zmail.root-a", "a new password").secret, mailKey)
 
   -- tokens run out
   sim.setClock(sim.now() + 31 * 24 * 3600 * 1000)
@@ -413,7 +463,7 @@ do
   local list = assert(op(c, bob, "list"))
   check("unread", list.messages[1].read, false)
   local answer = assert(op(c, bob, "read", { id = list.messages[1].id }))
-  check("body", answer.message.body, "Noon?")
+  check("body", sim.call(c, function() return c.client.decrypt(bob, answer.message) end), "Noon?")
   check("now read", assert(op(c, bob, "list")).messages[1].read, true)
   check("can't read someone else's", (op(c, alice, "read", { id = list.messages[1].id })), nil)
   check("delete", op(c, bob, "delete", { id = list.messages[1].id }) ~= nil)
@@ -437,6 +487,22 @@ do
   walk(sim.wire)
   check("mail isn't on the wire", seen, false)
 
+  -- nor on either server's disk, while it's waiting to go or once it's there
+  send(c, alice, { "carol@other.root-a", "bob" }, "Disk", marker)
+  local queued = sim.copy(one.db.outbox()[1])
+  sim.run(function() return #inbox(two, "carol") > 1 and #one.db.outbox() == 0 end, 60)
+  walk(queued)
+  for _, computer in ipairs({ one, two }) do walk(computer.files) end
+  check("mail isn't on the disks", seen, false)
+  check("the queue held no key but carol's", queued.message.keys.carol ~= nil and queued.message.keys.bob == nil)
+  check("carol can read it", bodyOf(two, "carol", inbox(two, "carol")[1].id), marker)
+  check("bob can read it", bodyOf(one, "bob", inbox(one, "bob")[1].id), marker)
+  check("alice can't", sim.call(c, function()
+    local stored = one.db.open("bob", inbox(one, "bob")[1].id)
+    return c.client.decrypt(alice, stored)
+  end), nil)
+  one.db.delete("bob", inbox(one, "bob")[1].id)
+
   -- refused up front
   local nope, why = send(c, alice, { "nobody" }, "x", "y")
   check("unknown local account", nope, nil)
@@ -447,6 +513,14 @@ do
   check("no recipients", (send(c, alice, {}, "x", "y")), nil)
   check("too long", (send(c, alice, { "bob" }, "x", string.rep("y", 9000))), nil)
   check("subject type", (send(c, alice, { "bob" }, 5, "y")), nil)
+  check("unsealed mail is refused", (op(c, alice, "send", { to = { "bob" }, subject = "x", body = "plain" })), nil)
+  local box = sim.call(c, function() return cryptoOf(c).seal(string.rep("k", 32), "x") end)
+  check("mail not sealed for everyone is refused", (op(c, alice, "send", { to = { "bob" }, subject = "x", body = box, keys = {} })), nil)
+  check("nothing got in", #inbox(one, "bob"), 0)
+  local huge = sim.copy(box)
+  huge.ct = string.rep("ab", 8193)
+  local fine = sim.call(c, function() return cryptoOf(c).sealTo(alice.public, "x") end)
+  check("too big when sealed", (op(c, alice, "send", { to = { "bob" }, subject = "x", body = huge, keys = { ["bob@zmail.root-a"] = fine } })), nil)
 end
 reset()
 
@@ -491,8 +565,17 @@ do
   account(two, "carol")
   local c = clientComputer(3, { root })
   local alice = assert(signIn(c, "alice@zmail.root-a"))
+  check("first contact", send(c, alice, { "carol@other.root-a" }, "Hello", "Are you there?") ~= nil)
+  sim.run(function() return #inbox(two, "carol") > 0 end, 60)
+  sim.run(function() return #one.db.outbox() == 0 end, 60)
   local twoFiles = two.files
   sim.powerOff(two)
+
+  -- no key has been seen for this one, so there's nothing to encrypt it with
+  local nope, why = send(c, alice, { "dave@other.root-a" }, "New", "Hi")
+  check("can't write to a stranger on a server that's away", nope, nil)
+  check("says why", has(why, "key for dave@other.root-a"))
+  check("nothing queued", #one.db.outbox(), 0)
 
   check("accepted while it's away", send(c, alice, { "carol@other.root-a" }, "Later", "Still there?") ~= nil)
   sim.run(function() return #one.db.outbox() == 1 and one.db.outbox()[1].attempts > 0 end, 60)
@@ -502,15 +585,16 @@ do
   one = restartMail(one)
   check("queue survives a reboot", #one.db.outbox(), 1)
   two = restartMail({ id = 2, files = twoFiles })
-  sim.run(function() return #inbox(two, "carol") > 0 end, 300)
+  sim.run(function() return #inbox(two, "carol") > 1 end, 300)
   check("delivered in the end", inbox(two, "carol")[1].subject, "Later")
+  check("and readable", bodyOf(two, "carol", inbox(two, "carol")[1].id), "Still there?")
   sim.run(function() return #one.db.outbox() == 0 end, 60)
   check("left the queue", #one.db.outbox(), 0)
 
   -- sending it again after a lost answer doesn't make two
   local id = inbox(two, "carol")[1].id
   check("repeat is harmless", two.db.store("carol", two.db.open("carol", id)))
-  check("kept once", #inbox(two, "carol"), 1)
+  check("kept once", #inbox(two, "carol"), 2)
 end
 reset()
 
@@ -524,16 +608,29 @@ do
   local c = clientComputer(3, { root })
   local alice = assert(signIn(c, "alice@zmail.root-a"))
 
+  local nope, why = send(c, alice, { "ghost@other.root-a", "carol@other.root-a" }, "Hello", "Anyone?")
+  check("an unknown address is refused up front", nope, nil)
+  check("says who", has(why, "ghost@other.root-a"))
+  check("nothing sent", #inbox(two, "carol"), 0)
+
+  -- an account deleted while its mail was on the way
+  account(two, "ghost")
   send(c, alice, { "ghost@other.root-a", "carol@other.root-a" }, "Hello", "Anyone?")
+  sim.call(two, function() two.db.removeAccount("ghost") end)
   sim.run(function() return #inbox(two, "carol") > 0 and #inbox(one, "alice") > 0 end, 60)
   check("bounce from the postmaster", inbox(one, "alice")[1].from, "postmaster@zmail.root-a")
   check("names the message", has(inbox(one, "alice")[1].subject, "Hello"))
-  check("names the address", has(one.db.open("alice", inbox(one, "alice")[1].id).body, "ghost@other.root-a"))
+  check("names the address", has(bodyOf(one, "alice", inbox(one, "alice")[1].id), "ghost@other.root-a"))
+  check("a bounce is encrypted too", has(one.files["etc/zos/mail-server/boxes/alice/" .. inbox(one, "alice")[1].id], "ghost@other"), false)
   sim.run(function() return #one.db.outbox() == 0 end, 60)
   check("the rest was delivered", #inbox(two, "carol"), 1)
 
-  -- a host that doesn't exist, after days of trying
-  send(c, alice, { "x@nowhere.root-a" }, "Lost", "body")
+  -- a host that goes away for good, after days of trying
+  local lost = sealed(one, { id = string.rep("c", 32), from = "alice@zmail.root-a", to = { "x@nowhere.root-a" }, subject = "Lost" }, { "alice" })
+  sim.call(one, function()
+    one.db.queue("nowhere.root-a", { "x" }, one.db.cleanMessage(lost))
+    one.env.os.queueEvent("mail_outbox")
+  end)
   sim.run(function() return one.db.outbox()[1] and one.db.outbox()[1].attempts > 0 end, 60)
   sim.setClock(sim.now() + 4 * 24 * 3600 * 1000)
   sim.run(function() return #one.db.outbox() == 0 end, 4000)
@@ -541,7 +638,7 @@ do
 
   -- a full mailbox refuses, and the sender keeps trying
   for i = 1, 64 do
-    two.db.store("carol", two.db.cleanMessage({ id = string.format("%032x", i), from = "a@b.c", to = {}, subject = "s", body = "" }))
+    two.db.store("carol", two.db.cleanMessage(sealed(two, { id = string.format("%032x", i), from = "a@b.c", to = {}, subject = "s" }, { "carol" })))
   end
   send(c, alice, { "carol@other.root-a" }, "Room?", "body")
   sim.run(function() return one.db.outbox()[1] and one.db.outbox()[1].attempts > 0 end, 60)
@@ -560,8 +657,8 @@ do
   account(one, "alice")
   account(two, "carol")
 
-  local message = { id = string.rep("a", 32), from = "alice@zmail.root-a", to = { "carol@other.root-a" },
-    subject = "Pay me", body = "Love, alice" }
+  local message = sealed(two, { id = string.rep("a", 32), from = "alice@zmail.root-a", to = { "carol@other.root-a" },
+    subject = "Pay me", body = "Love, alice" }, { "carol" })
 
   -- a stranger with no certificate
   local stranger = sim.computer(3)
@@ -585,18 +682,28 @@ do
   end, 60).payload.results.carol, "ok")
 
   -- what's on screen is plain text, whatever is sent
-  local nasty = sim.copy(message)
-  nasty.id = string.rep("b", 32)
-  nasty.subject = "line\nbreak\27[31m" .. string.rep("x", 100)
-  nasty.body = "keeps\nlines\tand tabs\1\2\27"
+  local nasty = sealed(two, { id = string.rep("b", 32), from = "alice@zmail.root-a", to = { "carol@other.root-a" },
+    subject = "line\nbreak\27[31m" .. string.rep("x", 100), body = "keeps\nlines\tand tabs\1\2\27" }, { "carol" })
   sim.call(one, function()
     return one.net.requestHost("other.root-a", 4202, { op = "deliver", users = { "carol", "../accounts" }, message = nasty })
   end, 60)
   local stored = two.db.open("carol", nasty.id)
   check("subject has no controls", stored.subject:find("%c"), nil)
   check("subject is limited", #stored.subject, 64)
-  check("body keeps lines", stored.body:sub(1, 22), "keeps\nlines\tand tabs")
-  check("body has no other controls", #stored.body, 20)
+  local reader = sim.computer(4)
+  reader.appDir = "apps/mail/"
+  local client = reader.env.require("mailclient")
+  local cert = two.db.certificate("carol")
+  local carol = { public = cryptoOf(two).fromHex(cert.public),
+    secret = sim.call(two, function() return cryptoOf(two).unlock("correct horse", cert.locked) end) }
+  local shown = sim.call(reader, function() return client.decrypt(carol, stored) end)
+  check("body keeps lines", shown:sub(1, 22), "keeps\nlines\tand tabs")
+  check("body has no other controls", #shown, 20)
+
+  -- a key can be swapped by a server, but only to something that doesn't open
+  local swapped = sim.copy(stored)
+  swapped.key = sim.call(two, function() return cryptoOf(two).sealTo(carol.public, "short") end)
+  check("a bad key opens nothing", sim.call(reader, function() return client.decrypt(carol, swapped) end), nil)
 
   local unsafe = sim.copy(message)
   unsafe.id = "../accounts"
@@ -633,6 +740,53 @@ do
   local nope = sim.call(c, function() return c.client.call(signedIn, "list") end, 120)
   check("the answer doesn't go down the wrong session", nope, nil)
   check("it was tried", answers > 0)
+end
+reset()
+
+-- An admin can't open the key, so a reset means a new one
+do
+  local root = rootServer(10, "Root A")
+  local server = mailServer(1, root, "zmail.root-a")
+  account(server, "alice")
+  account(server, "bob")
+  local c = clientComputer(2, { root })
+  local bob = assert(signIn(c, "bob@zmail.root-a"))
+  local alice = assert(signIn(c, "alice@zmail.root-a"))
+  send(c, bob, { "alice" }, "Before", "old mail")
+  local public = server.db.publicKey("alice")
+  check("reset", sim.call(server, function() return server.db.setPassword("alice", "reset password") end))
+  check("new key", server.db.publicKey("alice") ~= public)
+  check("signed out", (op(c, alice, "list")), nil)
+  alice = assert(signIn(c, "alice@zmail.root-a", "reset password"))
+  local list = assert(op(c, alice, "list"))
+  local old = assert(op(c, alice, "read", { id = list.messages[1].id }))
+  check("old mail stays, unreadable", sim.call(c, function() return c.client.decrypt(alice, old.message) end), nil)
+  send(c, bob, { "alice" }, "After", "new mail")
+  local new = assert(op(c, alice, "read", { id = assert(op(c, alice, "list")).messages[1].id }))
+  check("new mail reads", sim.call(c, function() return c.client.decrypt(alice, new.message) end), "new mail")
+end
+reset()
+
+-- Accounts from before mail was encrypted are brought over at their next sign-in
+do
+  local root = rootServer(10, "Root A")
+  local server = mailServer(1, root, "zmail.root-a")
+  account(server, "alice")
+  local util = server.env.require("util")
+  local accounts = util.readTable("/etc/zos/mail-server/accounts")
+  accounts.alice.key, accounts.alice.sealed = nil, nil
+  util.writeTable("/etc/zos/mail-server/accounts", accounts)
+  local id = string.rep("d", 32)
+  util.writeTable("/etc/zos/mail-server/boxes/alice/" .. id, { id = id, from = "a@b.c", to = {}, subject = "Old", body = "from before", date = 1 })
+  util.writeTable("/etc/zos/mail-server/boxes/alice/index", { { id = id, from = "a@b.c", subject = "Old", date = 1, read = false } })
+
+  check("no key yet", (server.db.publicKey("alice")), nil)
+  local c = clientComputer(2, { root })
+  local alice = assert(signIn(c, "alice@zmail.root-a"))
+  check("got a key", cryptoOf(c).toHex(alice.public), server.db.publicKey("alice"))
+  check("old mail is sealed", has(server.files["etc/zos/mail-server/boxes/alice/" .. id], "from before"), false)
+  local answer = assert(op(c, alice, "read", { id = id }))
+  check("and readable", sim.call(c, function() return c.client.decrypt(alice, answer.message) end), "from before")
 end
 reset()
 
@@ -744,7 +898,7 @@ do
   char(c, "y")
   check("reply sent", screenHas(c, "Sent."))
   sim.run(function() return #server.db.index("alice") == 2 end, 60)
-  check("quotes the original", has(server.db.open("alice", server.db.index("alice")[1].id).body, "> Buy diamonds"))
+  check("quotes the original", has(bodyOf(server, "alice", server.db.index("alice")[1].id), "> Buy diamonds"))
 end
 reset()
 

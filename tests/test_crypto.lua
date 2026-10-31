@@ -68,5 +68,23 @@ local seed, pk = crypto.signingKeypair()
 check("ed25519 sign and verify", crypto.verify(pk, "hello", crypto.sign(seed, "hello")), true)
 check("crypto yields during signing", cooperative > 0, true)
 
+local sk, public = crypto.keypair()
+local _, otherPublic = crypto.keypair()
+local sealed = crypto.sealTo(public, "for your eyes")
+check("sealed to a key", crypto.openSealed(sk, public, sealed), "for your eyes")
+check("sealed to another key", crypto.openSealed(crypto.randomBytes(32), otherPublic, sealed), nil)
+check("sealed empty", crypto.openSealed(sk, public, crypto.sealTo(public, "")), "")
+check("sealed rubbish", crypto.openSealed(sk, public, { eph = "zz" }), nil)
+check("low-order key refused", crypto.sealTo(string.rep("\0", 32), "x"), nil)
+local tampered = crypto.sealTo(public, "x")
+tampered.eph = hex(select(2, crypto.keypair()))
+check("sealed with a changed key", crypto.openSealed(sk, public, tampered), nil)
+
+local locked = crypto.lock("hunter2", "secret")
+check("locked", crypto.unlock("hunter2", locked), "secret")
+check("wrong password", crypto.unlock("hunter3", locked), nil)
+check("locked rubbish", crypto.unlock("hunter2", "x"), nil)
+check("each lock has its own salt", crypto.lock("hunter2", "secret").salt ~= locked.salt, true)
+
 if failed > 0 then os.exit(1) end
 print("crypto: all passed")

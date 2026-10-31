@@ -262,7 +262,7 @@ Apps also get a global `zos` table:
 | `zos.ui`            | the UI toolkit (`menu`, `pager`, `screen`, `text`, `input`, `message`, `confirm`, ...) |
 | `zos.apps`          | the app registry (`list`, `install`, `remove`, ...) |
 | `zos.auth`          | the account API |
-| `zos.crypto`        | X25519, ChaCha20, HMAC-SHA256, `seal`/`open`, random bytes |
+| `zos.crypto`        | X25519, ChaCha20, HMAC-SHA256, `seal`/`open`, `sealTo`/`openSealed`, `lock`/`unlock`, random bytes |
 | `zos.keys`          | users' key pairs and pinned remote keys |
 | `zos.import(name)`  | load a system library from `/zos/lib` |
 | `zos.addStatus(fn)` | add text to the desktop's title bar; `fn(session)` returns a short string or nil |
@@ -424,13 +424,31 @@ in Mail Server shows what's queued and why. To exchange mail, both servers have 
 roots, because each one looks the other up and checks that a message comes from the server named
 in its address. Nothing is relayed through a third server.
 
-- **Mail is encrypted on its way, not on the server.** `net` protects it between computers, but it's
-  stored as ordinary files in `/etc/zos/mail-server/`, so anyone who can log in to the mail server
-  can read it. Mail isn't end-to-end encrypted.
+Writing to someone on another server takes their public key, which your server asks for and
+remembers. The first message to an address needs that server to be up. After that, mail can be
+queued while it's away.
+
+- **Message bodies are encrypted on the server.** Every account has an X25519 key pair, made by the
+  mail server with the account. The public key stays readable. The secret key is kept locked with
+  the password, and is downloaded and unlocked by Mail at sign-in, or saved as a file with
+  **Download key**. Mail encrypts each body under a new key, which it seals to each recipient's
+  public key, and decrypts it after reading it from the server. That covers mailboxes, the outgoing
+  queue and bounces, which is why a bounce doesn't quote the message.
+- **Addresses, subjects and dates aren't encrypted,** because servers need them or show them in the
+  inbox. Anyone who can log in to the mail server can read those.
+- **The server still sees your password when you sign in,** so this protects stored mail, not mail
+  from a server that's been altered to record passwords or hand out the wrong public key. A stolen
+  server's key files can be attacked by guessing passwords, so use a long one.
+- **Only the account's owner can keep its mail.** Changing your password in Mail re-locks the same
+  key, and needs the current password. An admin's **Reset password** can't open the key, so it makes
+  a new one, and mail already in the mailbox stays unreadable.
+- **Accounts from before Mail 1.1** get a key, and have their mailbox encrypted, at their next
+  sign-in. Until then they can't receive mail, and what's in their mailbox stays unencrypted.
 - **A server vouches for its own addresses.** The hostname in a sender's address is proven. The
   account name in front of it is only as honest as that server.
-- **Passwords only travel when signing in,** and are stored salted and hashed. Mail keeps a token
-  instead, sealed with your zOS user's key, for 30 days. Changing a password signs out every other
+- **Passwords only travel when signing in or changing them,** and are stored salted and hashed.
+  Mail keeps a token and your unlocked mail key instead, sealed with your zOS user's key, and the
+  token lasts 30 days. Changing a password signs out every other
   computer. Five wrong passwords lock an account for a minute.
 - **Limits.** 8 KB per message, 8 recipients, 64 messages per mailbox, 64 accounts and 32 queued
   deliveries. A full mailbox makes other servers keep trying.

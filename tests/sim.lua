@@ -147,12 +147,55 @@ local function queue(c, ...)
   c.events[#c.events + 1] = table.pack(...)
 end
 
+-- A printer to put in a computer's `printers`, by peripheral name. Like the real one, it refuses
+-- to do anything to a page that hasn't been started. `tray` is how many pages fit in its output.
+function sim.printer(paper, ink, tray)
+  local p = { pages = {} }
+  local page, x, y
+  local function current()
+    if not page then error("Page not started", 0) end
+    return page
+  end
+  function p.getPaperLevel() return paper end
+  function p.getInkLevel() return ink end
+  function p.newPage()
+    if page or paper == 0 or ink == 0 then return false end
+    paper, ink = paper - 1, ink - 1
+    page, x, y = { lines = {} }, 1, 1
+    return true
+  end
+  function p.setPageTitle(title) current().title = title end
+  function p.setCursorPos(a, b) current() x, y = a, b end
+  function p.write(text)
+    local lines = current().lines
+    assert(x == 1 and y >= 1 and y <= 21 and #text <= 25, "off the page")
+    lines[y] = text
+  end
+  function p.endPage()
+    current()
+    if tray and #p.pages >= tray then return false end
+    p.pages[#p.pages + 1] = page
+    page = nil
+    return true
+  end
+  -- Everything printed, with the page titles, as one string.
+  function p.text()
+    local out = {}
+    for _, printed in ipairs(p.pages) do
+      out[#out + 1] = "[" .. tostring(printed.title) .. "]"
+      for i = 1, 21 do out[#out + 1] = printed.lines[i] or "" end
+    end
+    return table.concat(out, "\n")
+  end
+  return p
+end
+
 -- Boot a computer. Passing the same `files` table again is a reboot: memory is lost, disk isn't.
 function sim.computer(id, opts)
   opts = opts or {}
   local c = {
     id = id, files = opts.files or {}, events = {}, timers = {}, timerId = 0, threads = {},
-    modems = opts.modems or { top = { open = {} } }, label = opts.label, width = opts.width,
+    modems = opts.modems or { top = { open = {} } }, printers = {}, label = opts.label, width = opts.width,
   }
   sim.computers[id] = c
 
@@ -183,11 +226,15 @@ function sim.computer(id, opts)
     getNames = function()
       local names = {}
       for name in pairs(c.modems) do names[#names + 1] = name end
+      for name in pairs(c.printers) do names[#names + 1] = name end
       table.sort(names)
       return names
     end,
-    getType = function(name) return c.modems[name] and "modem" or nil end,
+    getType = function(name)
+      return c.modems[name] and "modem" or c.printers[name] and "printer" or nil
+    end,
     call = function(name, method, a, b, message)
+      if c.printers[name] then return c.printers[name][method](a, b) end
       local modem = c.modems[name]
       if method == "open" then modem.open[a] = true
       elseif method == "close" then modem.open[a] = nil

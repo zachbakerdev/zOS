@@ -369,6 +369,11 @@ Revoking one in the app stops it renewing and frees the name, but the certificat
 keeps working until it expires, because computers don't check back with the root server. Keep the
 lifetime short if that matters to you.
 
+With a printer attached, both sides can put this on paper. **Print server identity** in the Root
+Server app prints the server's name, top-level domain, computer, port, fingerprint and public key,
+for people to check against when they add it. **Settings → Network → Print certificate** prints
+this computer's certificate, in full. Each needs paper and ink for up to two pages.
+
 ### Hostnames
 
 A hostname is a name a root server gives out under its own top-level domain, like `zmail.root-a`.

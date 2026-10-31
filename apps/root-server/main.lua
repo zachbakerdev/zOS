@@ -6,6 +6,7 @@ local session = ...
 local ui = require("ui")
 local crypto = require("crypto")
 local net = require("net")
+local printer = require("printer")
 local system = require("system")
 local trust = require("trust")
 local db = require("rootdb")
@@ -131,13 +132,24 @@ local function requests()
     end
 end
 
-local function serverInfo()
+-- Everything someone needs to check they've found this server. Only the public half of the key.
+local function identityText()
     local _, public = db.keypair()
-    ui.pager(TITLE .. " - This server", "Name: " .. db.config().name .. "\nTop-level domain: ." ..
+    return "Name: " .. db.config().name .. "\nTop-level domain: ." ..
         db.config().zone.tld .. "\nComputer: " .. os.getComputerID() ..
         "\nPort: " .. net.ROOT_PORT .. "\n\nFingerprint:\n" .. db.fingerprint() ..
         "\n\nPublic key:\n" .. crypto.toHex(public) ..
-        "\n\nPeople adding this server in Settings > Network should see this fingerprint.")
+        "\n\nPeople adding this server in Settings > Network should see this fingerprint."
+end
+
+local function serverInfo()
+    ui.pager(TITLE .. " - This server", identityText())
+end
+
+local function printIdentity()
+    ui.screen(TITLE)
+    ui.text("Printing...", ui.theme.dim)
+    done("Printed. It's in the printer's output tray.", printer.print("Root server: " .. db.config().name, identityText()))
 end
 
 local function rename()
@@ -197,6 +209,7 @@ while true do
         { label = "Requests" .. (pending > 0 and (" (" .. pending .. " waiting)") or ""), action = requests,
           hint = "Approve computers and manage certificates", fg = pending > 0 and ui.theme.accent or nil },
         { label = "This server", action = serverInfo, hint = "Name and fingerprint" },
+        { label = "Print server identity", action = printIdentity, hint = "For others to verify this server against" },
         { label = "Name: " .. config.name, action = rename, hint = "What computers see when they look for roots" },
         { label = "Top-level domain: ." .. config.zone.tld, action = changeTld, hint = "What hostnames here end in" },
         { label = "Certificates last " .. config.days .. " days", action = lifetime, hint = "How long a signature is good for" },

@@ -10,6 +10,7 @@ local system = require("system")
 local net = require("net")
 local trust = require("trust")
 local update = require("update")
+local printer = require("printer")
 
 local TITLE = "Settings"
 local me = session.user
@@ -375,6 +376,46 @@ local function networkIdentity()
     ui.pager(TITLE .. " - This computer", table.concat(lines, "\n"))
 end
 
+local function certificateText(cert)
+    local function date(ms) return os.date("!%Y-%m-%d %H:%M UTC", math.floor(ms / 1000)) end
+    local root = trust.root(cert.root)
+    return table.concat({
+        "Certificate for:\n" .. cert.name,
+        "Computer: " .. cert.id,
+        "Issued:\n" .. date(cert.issued) .. "\n" .. (daysLeft(cert) > 0 and "Expires:\n" or "EXPIRED:\n") ..
+            date(cert.expires),
+        "Fingerprint:\n" .. trust.fingerprint(crypto.fromHex(cert.key)),
+        "Public key:\n" .. cert.key,
+        "Signed by:\n" .. (root and root.name or "an untrusted root"),
+        "Root fingerprint:\n" .. trust.fingerprint(crypto.fromHex(cert.root)),
+        "Root public key:\n" .. cert.root,
+        "Signature:\n" .. cert.sig,
+    }, "\n\n")
+end
+
+local function printCertificate()
+    local certs = trust.certs()
+    if #certs == 0 then
+        return ui.message(TITLE, "This computer has no certificate. Request one from a root server.", ui.theme.bad)
+    end
+    local cert = certs[1]
+    if #certs > 1 then
+        local items = {}
+        for _, c in ipairs(certs) do
+            local root = trust.root(c.root)
+            items[#items + 1] = { label = c.name, hint = "From " .. (root and root.name or "an untrusted root") }
+        end
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+        local choice = ui.menu({ title = TITLE .. " - Print certificate", items = items, back = true })
+        cert = choice and certs[choice]
+        if not cert then return end
+    end
+    ui.screen(TITLE .. " - Print certificate")
+    ui.text("Printing...", ui.theme.dim)
+    done("Printed. It's in the printer's output tray.", printer.print("Certificate: " .. cert.name,
+        certificateText(cert)))
+end
+
 local function network()
     local selected = 1
     while true do
@@ -382,6 +423,7 @@ local function network()
             { label = "Root servers (" .. #trust.roots() .. ")", action = rootServers,
               hint = "Servers that vouch for other computers" },
             { label = "This computer", action = networkIdentity, hint = "Fingerprint and certificates" },
+            { label = "Print certificate", action = printCertificate, hint = "Print this computer's certificate" },
             { label = "Back", fg = ui.theme.dim },
         }
         selected = ui.menu({ title = TITLE .. " - Network", items = items, selected = selected, back = true })

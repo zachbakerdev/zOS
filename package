@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""Minify everything in src/ and embed it in a .zi system image.
+
+    ./package                   writes dist/zos.zi
+    ./package -o other.zi       or somewhere else
+    ./package --no-minify       keep comments and indentation, for readable error messages
+    ./package --src some/dir    package another folder
+
+src/ mirrors the target computer, so src/.zos/boot.lua becomes /.zos/boot.lua. The image follows
+specs/formats/ZI_FORMAT.md, and the same input always gives the same bytes.
+
+Lua files are minified with LuaSrcDiet. See tools/minify_lua.py for how to install it.
+"""
+
+import argparse
+import fnmatch
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+
+from minify_lua import minify  # noqa: E402
+
+DEFAULT_SRC = os.path.join(ROOT, "src")
+DEFAULT_OUT = os.path.join(ROOT, "dist", "zos.zi")
+
+FORMAT_VERSION = 1
+MAX_PATH = 128  # bytes after the leading /
+SEGMENT = re.compile(r"[A-Za-z0-9_.\-]+")
+RESERVED = re.compile(r"(rom|disk\d*)$")  # read-only, or a mounted disk
+
+# Left behind by editors and tools, not part of the system.
+IGNORED = ["__pycache__", ".DS_Store", "Thumbs.db", ".git", "*~", "*.swp", ".*.swp"]
+
+FLOPPY_SIZE = 125 * 1000
+PASTEBIN_LIMIT = 512 * 1024
+MIN_FILE_SIZE = 500  # CC: Tweaked counts each file and folder as at least this many bytes
+
+
+def ignored(name):
+    return any(fnmatch.fnmatch(name, pattern) for pattern in IGNORED)
+
+
+def collect(src):
+    """Every file under src, as a sorted list of (absolute target path, bytes)."""
+    files = []
+    for dirpath, dirnames, filenames in os.walk(src):
+        dirnames[:] = sorted(d for d in dirnames if not ignored(d))
+        for name in filenames:
+            if ignored(name):
+                continue
+            full = os.path.join(dirpath, name)
+            with open(full, "rb") as f:
+                files.append(("/" + os.path.relpath(full, src).replace(os.sep, "/"), f.read()))
+    return sorted(files)
+
+
+def path_problem(path):
+    """Why this path breaks the rules in ZI_FORMAT.md, or None."""
+    if len(path.encode()) - 1 > MAX_PATH:
+        return f"is longer than {MAX_PATH} bytes"
+    segments = path[1:].split("/")
+    for segment in segments:
+        if not SEGMENT.fullmatch(segment):
+            return f"has a segment that isn't allowed: {segment!r}"
+        if not segment.strip("."):
+            return f"has a segment of only dots: {segment!r}"
+    if RESERVED.match(segments[0]):
+        return f"is inside /{segments[0]}, which can't be written to"
+    return None
+
+
+def check_paths(files):
+    """Exit if any path can't go in an image. Warn about paths that may clash on the target."""
+    problems = [f"{path} {why}" for path, why in ((p, path_problem(p)) for p, _ in files) if why]
+    # os.walk can't give a file and a folder the same path, but keep the rule stated in one place.
+    paths = {path for path, _ in files}
+    for path in paths:
+        parent = path.rsplit("/", 1)[0]
+        while parent:
+            if parent in paths:
+                problems.append(f"{parent} is both a file and a folder")
+            parent = parent.rsplit("/", 1)[0]
+    if problems:
+        sys.exit("Can't build the image:\n  " + "\n  ".join(sorted(set(problems))))
+
+    seen = {}
+    for path in sorted(paths):
+        other = seen.setdefault(path.lower(), path)
+        if other != path:
+            print(f"Warning: {other} and {path} differ only by case.", file=sys.stderr)
+
+
+def minify_file(path, data):
+    """data minified, if it's a kind of file that can be."""
+    if path.endswith(".lua"):
+        return minify(path, data)
+    if path.endswith(".manifest"):
+        # A manifest is a bare table, which LuaSrcDiet only reads as part of a statement.
+        result = minify(path, b"return " + data).strip()
+        if not result.startswith(b"return"):
+            sys.exit(f"Minifying {path} gave something unexpected.")
+        return result[len(b"return"):].strip()
+    return data
+
+
+def lua_string(data):
+    """A double-quoted Lua string for these bytes, in printable ASCII only."""
+    out = ['"']
+    for byte in data:
+        char = chr(byte)
+        if char in '"\\':
+            out.append("\\" + char)
+        elif 0x20 <= byte <= 0x7E:
+            out.append(char)
+        else:
+            out.append("\\%03d" % byte)  # always 3 digits, so a following digit isn't absorbed
+    out.append('"')
+    return "".join(out)
+
+
+def build_image(files):
+    lines = ["{", f'  ["zi:metadata"] = {{ version = {FORMAT_VERSION} }},']
+    lines += [f"  [{lua_string(path.encode())}] = {lua_string(data)}," for path, data in files]
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def find_lua():
+    return shutil.which("lua5.2") or shutil.which("lua")
+
+
+# Loads the image as a real reader would, compiles each Lua file and writes a sorted checksum list.
+CHECK_IMAGE = r"""
+local f = assert(io.open(arg[1], "rb"))
+local text = f:read("*a")
+f:close()
+local image = assert(load("return " .. text, "=image", "t", {}))()
+local names = {}
+for path, data in pairs(image) do
+  if path ~= "zi:metadata" then
+    names[#names + 1] = path
+    if path:match("%.lua$") then assert(load(data, "@" .. path, "t", {})) end
+    if path:match("%.manifest$") then assert(load("return " .. data, "@" .. path, "t", {})) end
+  end
+end
+table.sort(names)
+for _, path in ipairs(names) do io.write(path, " ", #image[path], "\n") end
+"""
+
+
+def verify(image_path, files):
+    """Exit unless the written image reads back as these files, in the Lua version CC uses."""
+    lua = find_lua()
+    if not lua:
+        print("Warning: Lua isn't installed, so the image wasn't checked.", file=sys.stderr)
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".lua", delete=False) as script:
+        script.write(CHECK_IMAGE)
+    try:
+        result = subprocess.run([lua, script.name, image_path], capture_output=True)
+    finally:
+        os.unlink(script.name)
+    if result.returncode != 0:
+        sys.exit(f"The image failed its check: {result.stderr.decode(errors='replace').strip()}")
+    expected = "".join(f"{path} {len(data)}\n" for path, data in sorted(files))
+    if result.stdout.decode() != expected:
+        sys.exit("The image doesn't read back as the files that went in.")
+
+
+def space_needed(files):
+    dirs = set()
+    for path, _ in files:
+        parts = path[1:].split("/")[:-1]
+        dirs.update("/".join(parts[:i + 1]) for i in range(len(parts)))
+    return sum(max(len(data), MIN_FILE_SIZE) for _, data in files) + MIN_FILE_SIZE * len(dirs)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-o", "--output", default=DEFAULT_OUT, help="where to write the image (default: dist/zos.zi)")
+    parser.add_argument("--src", default=DEFAULT_SRC, help="the folder to package (default: src/)")
+    parser.add_argument("--no-minify", action="store_true", help="keep the files' comments and indentation")
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.src):
+        sys.exit(f"There's no folder at {args.src}.")
+    files = collect(args.src)
+    if not files:
+        sys.exit(f"There are no files in {args.src}.")
+    check_paths(files)
+
+    before = sum(len(data) for _, data in files)
+    if not args.no_minify:
+        files = [(path, minify_file(path, data)) for path, data in files]
+
+    text = build_image(files)
+    output = os.path.abspath(args.output)
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(output, "wb") as f:
+        f.write(text.encode("ascii"))
+    verify(output, files)
+
+    after = sum(len(data) for _, data in files)
+    print(f"Wrote {os.path.relpath(output)}: {len(files)} files, {before / 1000:.0f} KB of source, "
+          f"{after / 1000:.0f} KB of files, {len(text) / 1000:.0f} KB image")
+    needed = space_needed(files)
+    print(f"Needs {needed / 1000:.0f} KB of disk space when unpacked.")
+    if len(text) > FLOPPY_SIZE:
+        print("Note: the image is too big for a default 125 KB floppy.")
+    if len(text) > PASTEBIN_LIMIT:
+        print(f"Note: that's over Pastebin's {PASTEBIN_LIMIT // 1024} KB limit for free accounts.")
+
+
+if __name__ == "__main__":
+    main()

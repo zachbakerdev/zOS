@@ -185,8 +185,6 @@ README with the details.
 |----------------------------------|----------------|--------------|
 | [`apps/mail`](apps/mail)         | **Mail**       | Read and send mail through a mail server, see [Mail](#mail) |
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
-| [`apps/zos-notes`](apps/zos-notes) | **Notes**      | Personal notes, saved in `/home/<user>/notes/` |
-| [`apps/zos-calc`](apps/zos-calc)   | **Calculator** | Evaluates expressions like `sqrt(2) * pi`, with variables (`x = 5`) and `ans` |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 
@@ -217,15 +215,8 @@ are new and which are updates, and **Update all** installs every update at once.
 a newer zOS is marked and left as it is until zOS is updated. These apps come from the same place as zOS updates, over HTTPS, and each download is checked
 against the list. **Install from URL or Pastebin** installs whatever it's given. An app that's already up to date is never replaced by an older one here.
 
-Use the **App Manager** app, or `appman` in the Shell:
-
-```
-appman list
-appman install disk/notes            -- a folder with an app.manifest
-appman install disk/tool.lua tool    -- a single file; a manifest is generated
-appman get <pastebin-code|url> tool  -- download a single-file app (needs the HTTP API)
-appman remove tool
-```
+Only admins can install or remove apps. [APPMAN.md](specs/APPMAN.md) describes the `appman` command
+for doing this from the Terminal, and [APPS.md](specs/libs/APPS.md) the library that App Manager uses.
 
 ### Writing apps
 
@@ -546,6 +537,7 @@ tools/
   make_app_disks.py       packs each app in apps/ into dist/<app>-disk.lua, which writes an app disk
   make_update.py          packs the update that computers download
 apps/                     optional apps: root-server, fileshare, mail, mail-server
+specs/                    how zOS is meant to work, see Specifications
 tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua, test_fileshare.lua, test_mail.lua, test_files.lua, test_update.lua
 disk/                     the setup floppy
   startup.lua             starts setup when a computer without zOS boots from the disk
@@ -565,10 +557,23 @@ disk/                     the setup floppy
       lib/update.lua      finds, checks and stores updates
       sys/login.lua       login screen
       sys/desktop.lua     app launcher
-      bin/appman.lua      command-line app manager
       apps/               built-in apps: files, shell, appman, settings, about
 dist/                     generated programs
 ```
+
+## Specifications
+
+The specifications describe how zOS is meant to work, not how the current code works. Where they
+differ, they are the target. For example, they use `/.zos` where the code still uses `/zos`.
+
+| specification | what it covers |
+|---------------|----------------|
+| [ZOS.md](specs/ZOS.md) | The system as a whole: layout, boot, users, updates and the security model |
+| [APP_STANDARDS.md](specs/APP_STANDARDS.md) | Where apps keep their files |
+| [ZA_FORMAT.md](specs/formats/ZA_FORMAT.md) | The .za app image format |
+| [ZI_FORMAT.md](specs/formats/ZI_FORMAT.md) | The .zi system image format |
+| [APPMAN.md](specs/APPMAN.md) | The `appman` command |
+| [specs/libs/](specs/libs) | One specification per system library, listed in [ZOS.md](specs/ZOS.md) |
 
 ## Limitations
 

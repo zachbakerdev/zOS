@@ -1,6 +1,6 @@
-# zOS Networking Specification
+# zOS Net Library Specification
 
-`require("net")` gives apps encrypted, authenticated messages between computers over modems. There's nothing to set up: every computer has its own key, and the key exchange happens by itself the first time two computers talk. The algorithms it uses are described in [CRYPTO.md](CRYPTO.md).
+`require("net")` gives apps encrypted, authenticated messages between computers over modems. There's nothing to set up: every computer has its own key, and the key exchange happens by itself the first time two computers talk. The algorithms it uses are described in [CRYPTO.md](CRYPTO.md), and who a computer believes in [TRUST.md](TRUST.md).
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -14,7 +14,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 | Root servers | Certificates and hostnames                                         |
 | Modems       | Delivery. CC: Tweaked modems reach anyone in range, so nothing here is trusted |
 
-zOS starts three background services at boot. A receiver queues incoming packets and never does crypto, a worker handles those packets and outgoing messages one at a time, and a renewer keeps certificates current.
+zOS starts three background services at boot with `net.start`, which apps MUST NOT call. A receiver queues incoming packets and never does crypto, a worker handles those packets and outgoing messages one at a time, and a renewer keeps certificates current. The worker never waits for the other computer, so two computers that write to each other at the same moment can't hold each other up.
 
 ### Ports
 
@@ -22,38 +22,15 @@ A port is a modem channel, from 0 to 65533. 65534 and 65535 are used by rednet.
 
 Each computer also keeps a home channel open, `30000 + id % 30000`, for handshake replies, acks and replies to requests. It can't be listened on, and only accepts answers to a request the computer is waiting on.
 
-| Port  | Used by                  |
-| ----- | ------------------------ |
-| 4200  | Root servers             |
-| 4201  | File Share               |
-| 4202  | Mail servers             |
+Root servers use port 4200, which is `net.ROOT_PORT`.
 
-Apps SHOULD pick a fixed port of their own that doesn't clash with these, and SHOULD avoid the home channel range.
+Apps SHOULD pick a fixed port of their own that doesn't clash with that, and SHOULD avoid the home channel range.
 
-## Trust
+## Peers
 
-The identity of a peer comes from its Ed25519 key, not its computer id, because anyone can claim any computer id.
-
-- **Verified.** The peer showed a current certificate, signed by a root server this computer trusts, for the key it proved it holds and the computer id it claims. `peer.name` is the name on the certificate. This is checked for every message, so removing a root takes effect at once.
-- **Pinned.** The peer has no such certificate. Its key is remembered against its computer id the first time it's seen, and it's refused if the key changes, unless the new key has a certificate for that id. The traffic is encrypted, but on first contact nothing shows who is on the other end.
+Every message says who sent it in `msg.peer`. A peer is either verified or pinned, as described in [Trust](TRUST.md#trust). In short, a verified peer has a certificate from a root server this computer trusts, and a pinned peer is only known to have the same key as last time.
 
 Apps MUST use `verified`, `expect` or a hostname for anything that matters. An app MUST NOT make a security decision from `msg.from` alone.
-
-### Certificates
-
-A certificate says that a key belongs to a name on a computer id, and has these fields: `name`, `id`, `key`, `root`, `issued`, `expires` and `sig`. They last 30 days unless the root server is set otherwise, and computers renew them during the last 7 days, starting shortly after boot and then hourly. A computer can hold one per root, and a peer's first 4 certificates are looked at.
-
-A revoked certificate keeps working until it expires, because computers don't check back with the root server.
-
-### Root servers
-
-A root server is a computer whose key others have chosen to trust. To use one, an admin adds it in **Settings → Network → Root servers**, comparing its fingerprint with the one the server shows. The computer then requests a certificate, and the root server's admin approves it.
-
-### Hostnames
-
-A hostname is a certificate name of the form `<label>.<tld>`, such as `zmail.root-a`, up to 24 characters of lowercase letters, digits and `-`, with one dot. Each root owns one top-level domain, set in a signed zone record, and only signs hostnames in that domain.
-
-A lookup finds the trusted root that owns the domain and asks it for the certificate. Both answers are signed by the root, so the computer it runs on can make a lookup fail but can't change the answer. If two trusted roots claim one domain, lookups in it are refused.
 
 ## Messages
 
@@ -78,14 +55,15 @@ A message that decrypts and authenticates goes into its port's inbox and queues 
 | `root`        | The root that issued it, by key. Only set if `verified`      |
 | `names`       | Every name it holds, as root key to name                     |
 
-A payload can be any value except a function, nested up to 16 levels, and up to 32 KB once encoded.
+A payload can be any value except a function, nested up to 16 levels, and up to 32 KB once encoded. `net.MAX_PAYLOAD` is the limit in bytes.
 
 ### Delivery
 
 - `send` returns true once the other computer has decrypted the message.
 - If an ack is lost, the message is sent again once with a new session, and the other computer ignores the repeat.
+- A peer that fails `verified`, `expect` or `key` on an existing session gets one new handshake, in case it has a new certificate. The same goes for a port that answers `denied`.
 - A port's inbox holds 32 messages. When it's full, the oldest is dropped.
-- A closed port doesn't answer a handshake, so a send to one fails by timing out. This can take around 20 seconds. On an existing session, it fails straight away.
+- A closed port doesn't answer a handshake, so a send to one fails by timing out. This can take around 15 seconds. On an existing session, it fails straight away.
 
 ## Methods
 
@@ -95,7 +73,7 @@ Every method that can fail returns nil and a reason. Failures MUST be expected, 
 
 | Method                       | Returns                                                                   |
 | ---------------------------- | ------------------------------------------------------------------------- |
-| `net.listen(port, opts)`     | True. Calling it again keeps the inbox                                    |
+| `net.listen(port, opts)`     | True. Calling it again changes the options and keeps the inbox            |
 | `net.close(port)`            | Nothing. Stops listening, and drops the inbox                             |
 | `net.receive(port, timeout)` | The next message. Waits forever if `timeout` (seconds) is nil             |
 | `net.modems()`               | The names of the attached modems                                          |
@@ -103,10 +81,10 @@ Every method that can fail returns nil and a reason. Failures MUST be expected, 
 
 | `listen` option | Meaning                                                              |
 | --------------- | -------------------------------------------------------------------- |
-| `modem`         | Only listen on this modem                                            |
+| `modem`         | Only listen on this modem. It isn't checked, so a wrong name just hears nothing |
 | `verified`      | Refuse any computer without a certificate from a trusted root        |
 
-Modems attached later are picked up automatically. `receive` returns nil on terminate, on a timeout, or if the port is closed. Other programs MAY wait for the event `net.EVENT` instead, but it reaches every program on the computer and is lost if nobody is waiting at that moment, so servers MUST use `receive`.
+Modems attached later are picked up automatically. `receive` returns nil on terminate, on a timeout, or if the port is closed. Other programs MAY wait for the event `net.EVENT` instead, whose value is the message, but it reaches every program on the computer and is lost if nobody is waiting at that moment, so servers MUST use `receive`. `net.close` queues the same event with no message, to wake up a `receive`, so anything that waits for it MUST check for nil.
 
 ### Sending
 
@@ -114,7 +92,7 @@ Modems attached later are picked up automatically. `receive` returns nil on term
 | --------------------------------------- | ------------------------------------------------------------- |
 | `net.send(id, port, payload, opts)`     | True once it has been received                                |
 | `net.request(id, port, payload, opts)`  | The reply's message table                                     |
-| `net.reply(msg, payload, opts)`         | True. `msg` MUST have come from `net.request`                 |
+| `net.reply(msg, payload)`               | True. `msg` MUST have come from `net.request`                 |
 
 | Option     | Meaning                                                                 |
 | ---------- | ----------------------------------------------------------------------- |
@@ -124,7 +102,7 @@ Modems attached later are picked up automatically. `receive` returns nil on term
 | `key`      | Only send to a computer with this public key, in hex                    |
 | `timeout`  | `request` only: seconds to wait for the reply, after delivery. Default 5 |
 
-These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goes to the key that asked, so a computer claiming the same id can't collect the answer.
+These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goes to the key that asked, on the session it asked on, so a computer claiming the same id can't collect the answer. It fails if that session has gone.
 
 ### Hostnames
 
@@ -136,14 +114,14 @@ These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goe
 | `net.rootForTld(tld)`                          | The trusted root that owns a top-level domain             |
 | `net.tldOf(root)`                              | The top-level domain of a trusted root                    |
 
-`requestHost` refuses to send to anyone but the holder of that hostname from the root that owns it. A computer can't reach its own hostname, because modems can't send to their own computer.
+`requestHost` refuses to send to anyone but the holder of that hostname, with the key on its certificate, from the root that owns it. `tldOf` remembers the answer, so it only asks a root once. A root that can't be reached stops `rootForTld` finding a domain only if no other root owns it. A computer can't reach its own hostname, because modems can't send to their own computer.
 
 ### Discovery
 
 | Method                         | Returns                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
 | `net.probe(port, timeout)`     | A list of `{ data, from }`, after `timeout` seconds. Default 3           |
-| `net.answerProbe(probe, data)` | Nothing. Answers a `net.PROBE_EVENT`                                     |
+| `net.answerProbe(probe, data)` | Nothing. Answers a `net.PROBE_EVENT`, whose value is `{ port, nonce, from, side }` |
 
 Probes are how computers find each other before they know anything about each other, so they aren't encrypted or authenticated. Apps MUST treat what comes back as a claim, and MUST NOT put secrets in an answer. A computer only hears probes on ports it's listening on.
 
@@ -156,7 +134,9 @@ Probes are how computers find each other before they know anything about each ot
 
 Being listed by `findRoots` proves only that a server holds the key it shows, so a person MUST compare the fingerprint before it's trusted. Ordinary apps don't need these methods, because Settings handles them.
 
-`require("trust")` has more about the computer's identity and certificates. Apps MAY read `trust.defaultName()`, `trust.roots()` and `trust.certs()`, but MUST NOT change the trusted roots or use `trust.identity()`, which returns the computer's secret seed.
+`requestCertificate` takes a root from `findRoots` or `trust.roots`. It checks a certificate that comes back against the root's key and this computer's key before storing it, so the computer the root runs on can make a request fail but no more. A new certificate is shown to peers at the next handshake.
+
+[TRUST.md](TRUST.md) has more about the computer's identity and certificates.
 
 ## Using these interfaces in an app
 
@@ -233,7 +213,7 @@ Compare against a specific root, as above, when more than one root is trusted. O
 Clients SHOULD reach servers by hostname where they can, because a computer id can be claimed and a hostname can't.
 
 ```lua
-local reply, err = net.requestHost("zmail.root-a", 4202, { op = "ping" }, { timeout = 5 })
+local reply, err = net.requestHost("zmail.root-a", 5000, { op = "ping" }, { timeout = 5 })
 
 -- A server can check where a message came from in the same way.
 if not net.isHost(msg.peer, "zmail.root-a") then return { error = "Not allowed" } end
@@ -268,7 +248,7 @@ end
 
 ### Sending more than 32 KB
 
-Split the data into chunks and send them in order with `net.request`, using the reply to confirm each one. File Share works this way, with 8 KB chunks. A box from `crypto.seal` is twice the size of its plaintext, because it's hex, so a sealed chunk has to stay under 16 KB.
+Split the data into chunks and send them in order with `net.request`, using the reply to confirm each one. A box from `crypto.seal` is twice the size of its plaintext, because it's hex, so a sealed chunk has to stay under 16 KB.
 
 ### Common mistakes
 
@@ -276,7 +256,7 @@ Split the data into chunks and send them in order with `net.request`, using the 
 - Trusting `msg.from`. Use `msg.peer` to decide whether to believe a message.
 - Trusting a `verified` peer because it's verified. It only means that a trusted root knows its name, so check the name too.
 - Trusting `net.probe` answers. Anyone in range can answer.
-- Assuming a peer is the same after a reinstall. Its new key is refused until an admin forgets the old one in **Settings → Encryption keys → Trusted keys**.
+- Assuming a peer is the same after a reinstall. Its new key is refused until an admin forgets the old one in **Settings → Encryption keys → Trusted keys**, unless it has a certificate.
 
 ## Protocol
 
@@ -293,11 +273,11 @@ Each side makes a new X25519 key for each handshake, and signs both ephemeral ke
 | `hello` | a to b    | a's ephemeral key, broadcast on the port                                    |
 | `resp`  | b to a    | b's ephemeral key, then encrypted: b's identity, certificates and signature |
 | `auth`  | a to b    | Encrypted: a's identity, certificates and signature                         |
-| `done`  | b to a    | A tag showing b has checked a                                               |
+| `done`  | b to a    | A tag showing b has checked a: the HMAC of `zos-net-1\|done\|` and the transcript |
 
 The transcript is the SHA-256 of `zos-net-1`, then a's ephemeral key, then b's. Keys are derived with HMAC-SHA256 from the X25519 secret, with the transcript as the salt, giving each direction its own handshake, encryption and MAC keys.
 
-b signs `zos-net-1|resp|`, the transcript and its identity. a signs `zos-net-1|auth|`, the transcript, b's identity and its own, so a's signature can't be presented to anyone else.
+`hello` is sent again every 5 seconds until it's answered, and is only answered on a port that's listening. b signs `zos-net-1|resp|`, the transcript and its identity. a signs `zos-net-1|auth|`, the transcript, b's identity and its own, so a's signature can't be presented to anyone else.
 
 An answer that fails its checks is ignored, not treated as a failure. `hello` is broadcast, so otherwise anyone could stop a connection by answering first.
 
@@ -307,7 +287,7 @@ A `data` packet has a session id, port, sequence number, ciphertext and tag. The
 
 Before encryption, the body is encoded with a format that's only ever read as data, because `textutils.unserialize` runs code. It holds the message id `id`, the payload `p` and, for a reply, the id `re` of the request.
 
-Each `ack` has a status of `ok`, `closed` or `denied`, and its own tag. Message ids are remembered for 60 seconds, so that a retry on a new session isn't delivered twice.
+Each `ack` has a status of `ok`, `closed` or `denied`, and its own tag. Replies go to the home channel of the computer that asked, with the port of the request. Message ids are remembered for 60 seconds, so that a retry on a new session isn't delivered twice.
 
 ### Limits
 
@@ -318,6 +298,7 @@ Each `ack` has a status of `ok`, `closed` or `denied`, and its own tag. Message 
 | Session lifetime             | 1 hour                                      |
 | Half-open handshakes         | 4 from other computers                      |
 | Handshake timeout            | 15 seconds per step                         |
+| Hello retry                  | Every 5 seconds                             |
 | Ack timeout                  | 6 seconds                                   |
 | Queued data packets          | 64                                          |
 | Queued handshake packets     | 8                                           |
@@ -326,11 +307,20 @@ Each `ack` has a status of `ok`, `closed` or `denied`, and its own tag. Message 
 
 These limits exist because handshakes are slow and packets come from anyone.
 
+### Root server requests
+
+Root servers answer `net.request` messages on port 4200. Each is a table with an `op`.
+
+| `op`          | Fields | Answer                                                      |
+| ------------- | ------ | ----------------------------------------------------------- |
+| `certificate` | `name` | `{ status, cert, message }`. `status` is `issued`, `pending` or `denied`. Any other answer is a refusal, explained by `message` |
+| `zone`        | None   | The root's zone record, as in [TRUST.md](TRUST.md#data-formats) |
+| `resolve`     | `name` | `{ cert }`, or nothing in `cert` if there's no such host    |
+
+They also answer probes on that port with a signed advert.
+
 ## Security limitations
 
 - **Denial of service.** Anyone in range can jam traffic, fill the handshake limit or stop a lookup.
 - **Traffic analysis.** Computer ids, ports, sizes and timing aren't hidden.
-- **First contact.** A pinned peer can be impersonated the first time it's seen.
-- **Revocation.** A certificate can't be cancelled before it expires, so keep lifetimes short if that matters.
-- **Stored identity.** The identity seed isn't encrypted, so any app on a computer can impersonate that computer. See [CRYPTO.md](CRYPTO.md).
-- **Root servers.** A trusted root can certify any name in its domain and any computer id, so an admin SHOULD only trust roots they'd trust with that power. Root servers MUST NOT be open for anyone to log in to.
+- **Trust.** First contact, revocation, the stored identity and root servers are covered in [TRUST.md](TRUST.md#security-limitations).

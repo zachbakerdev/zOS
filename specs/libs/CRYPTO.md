@@ -1,6 +1,6 @@
 # zOS Cryptography Specification
 
-`require("crypto")` gives apps hashing, encryption, key agreement and signatures, written in pure Lua. `require("keys")` manages users' keys. [NETWORKING.md](NETWORKING.md) builds on both, so apps that only need to talk to other computers don't have to use them directly.
+`require("crypto")` gives apps hashing, encryption, key agreement and signatures, written in pure Lua. [KEYS.md](KEYS.md) stores users' keys with it, and [NET.md](NET.md) builds on both, so apps that only need to talk to other computers don't have to use this library directly.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -24,7 +24,7 @@ Apps SHOULD use the highest-level method that fits, and MUST NOT build their own
 | To do this                                         | Use                                          |
 | -------------------------------------------------- | -------------------------------------------- |
 | Send data to another computer                      | `net`, not this library                      |
-| Encrypt data only the logged-in user can read      | `seal` with a key derived from `session.secretKey` |
+| Encrypt data only the logged-in user can read      | `seal` with a key derived from `session.secretKey`, as in [KEYS.md](KEYS.md#encrypting-a-users-data) |
 | Encrypt data for someone else's public key         | `sealTo`                                     |
 | Encrypt data with a password                       | `lock`                                       |
 | Prove who wrote something                          | `sign`                                       |
@@ -66,9 +66,9 @@ Anything received from outside MUST be checked with `isHex` before `fromHex`, wh
 | `crypto.sha256(msg)`                  | The SHA-256 of `msg`, as 64 hex characters      |
 | `crypto.sha512(msg)`                  | The SHA-512 of `msg`, as 128 hex characters     |
 | `crypto.hmac(key, msg)`               | The HMAC-SHA256 of `msg`, as 32 raw bytes       |
-| `crypto.fingerprint(publicKey)`       | A short form of a key for people to compare, as four groups of four hex characters |
+| `crypto.fingerprint(publicKey)`       | A short form of a key for people to compare, as four groups of four hex characters joined by `-` |
 
-`hmac` can also derive one key from another, using a label as `msg`. See [Encrypting a user's data](#encrypting-a-users-data).
+`hmac` can also derive one key from another, using a label as `msg`. See [Encrypting a user's data](KEYS.md#encrypting-a-users-data).
 
 ### Symmetric encryption
 
@@ -113,6 +113,9 @@ Code that uses `x25519` MUST reject an all-zero result. A shared secret SHOULD N
 | --------------------------------- | ------------------------------------------- |
 | `crypto.lock(password, plaintext)` | A locked table `{ salt, box }`             |
 | `crypto.unlock(password, locked)`  | The plaintext, or nil if the password is wrong |
+| `crypto.passwordKey(password, salt)` | A 32-byte key, as raw bytes. `salt` is raw bytes |
+
+`passwordKey` is what `lock` and `unlock` use. Apps SHOULD use those, and it's public for storing password hashes, as [AUTH.md](AUTH.md) does.
 
 ### Signatures
 
@@ -127,66 +130,9 @@ Ed25519 and X25519 keys are different kinds of key. A key from `keypair` MUST NO
 
 Signed text SHOULD start with a label naming what it is, such as `"my-app-receipt-1\n"`, so that a signature for one purpose can't be passed off as another.
 
-## User keys
-
-`require("keys")` stores each user's X25519 key pair. The secret key is encrypted with their password, and login unlocks it into `session.secretKey`, with the public key in `session.publicKey`. Both are raw bytes. Services don't have a session, so they can't reach a user's secret key.
-
-| Method                                | Returns                                                         |
-| ------------------------------------- | --------------------------------------------------------------- |
-| `keys.publicKey(user)`                | The user's public key on this computer, or nil                  |
-| `keys.hasKey(user)`                   | Whether the user has a key                                      |
-| `keys.known(address)`                 | The public key pinned for an address, or nil                    |
-| `keys.remember(address, publicKey)`   | Nothing. Pins a key                                             |
-| `keys.forgetKnown(address)`           | Nothing. Removes a pin                                          |
-| `keys.knownList()`                    | Every pin, as a list of `{ address, fingerprint }`              |
-
-`keys.create`, `keys.unlock`, `keys.rewrap`, `keys.forget` and `keys.reset` belong to the system, and apps MUST NOT call them.
-
-Pins are shared by all apps. An app's addresses SHOULD start with its id, as in `notes:alice`. The `net:` prefix belongs to the system.
-
 ## Using these interfaces in an app
 
-All of these examples go in an app's `main.lua`, which starts with `local session, app = ...`.
-
-### Encrypting a user's data
-
-Derive a key for the app, so that each app's data is encrypted under a different key. The file goes in the user's config folder, as described in [APP_STANDARDS.md](APP_STANDARDS.md).
-
-```lua
-local crypto = require("crypto")
-local util = require("util")
-
-local FILE = "/home/" .. session.user .. "/.config/" .. app.id .. "/secrets"
-
-local function appKey()
-    return crypto.hmac(session.secretKey, "zos-app-key|" .. app.id)
-end
-
-local function save(text)
-    util.writeTable(FILE, crypto.seal(appKey(), text))
-end
-
-local function load()
-    local box = util.readTable(FILE)
-    return box and crypto.open(appKey(), box)
-end
-```
-
-If an administrator resets the user's password, the old key is lost and this data can't be read again. Apps MUST handle `load` returning nil.
-
-### Encrypting for another user
-
-The sender needs only the recipient's public key. Only the recipient's secret key can open the box.
-
-```lua
-local box = crypto.sealTo(recipientPublicKey, "Meet at the mine")
-
--- On the recipient's computer:
-local text = crypto.openSealed(session.secretKey, session.publicKey, box)
-if not text then error("This message wasn't for you, or it was changed.", 0) end
-```
-
-To encrypt something large for several people, encrypt it once with a random key from `crypto.randomBytes(32)`, then `sealTo` that key for each of them, as Mail does.
+Encrypting data for a user or for someone else's key is shown in [KEYS.md](KEYS.md).
 
 ### Signing data
 
@@ -202,7 +148,7 @@ if not crypto.verify(public, text, signature) then
 end
 ```
 
-`verify` only shows that the holder of that key signed the text. The app still has to decide whether to trust the key: compare its `fingerprint` in person, or use a certificate as described in [NETWORKING.md](NETWORKING.md).
+`verify` only shows that the holder of that key signed the text. The app still has to decide whether to trust the key: compare its `fingerprint` in person, or use a certificate as described in [TRUST.md](TRUST.md).
 
 ### Verifying a download
 
@@ -218,12 +164,12 @@ A hash only helps if `expected` came from somewhere more trustworthy than the do
 
 These methods run in Lua on an emulated computer, so they're slow. X25519 and Ed25519 can take long enough to notice, and an app that needs them often SHOULD show that it's working.
 
-Long operations yield to the scheduler by queueing a `zos:crypto` event and waiting for it. Other events that arrive during that wait are discarded, so a program that calls these methods MUST NOT rely on seeing events in the meantime. `net` works around this by doing no crypto in the service that receives packets.
+Long operations yield to the scheduler by queueing a `zos:crypto` event and waiting for it. Other events that arrive during that wait are discarded, so a program that calls these methods MUST NOT rely on seeing events in the meantime. `net` works around this by doing no crypto in the service that receives packets. See [NET.md](NET.md).
 
 ## Security limitations
 
-- **Random numbers.** `randomBytes` hashes a pool built from the time, computer id, label and timing jitter. CC: Tweaked has no true random source, so this is only as strong as those inputs. zOS adds entropy where it can, such as from passwords at login. Apps SHOULD call `addEntropy` with anything unpredictable they have, such as key timings.
-- **Password strength.** Passwords go through only 200 rounds of SHA-256, because more would be too slow in Lua. A stolen locked table can be attacked offline, so weak passwords offer little protection.
+- **Random numbers.** `randomBytes` hashes a pool built from the computer id, label, a table's address, `math.random`, and the time of each call. CC: Tweaked has no true random source, so this is only as strong as those inputs. zOS adds entropy where it can, such as from passwords at login. Apps SHOULD call `addEntropy` with anything unpredictable they have, such as key timings.
+- **Password strength.** Passwords go through only about 200 rounds of SHA-256, because more would be too slow in Lua. A stolen locked table can be attacked offline, so weak passwords offer little protection.
 - **Timing.** Comparisons of tags and hashes aren't constant-time.
-- **Stored secrets.** The computer's identity seed is stored unencrypted, because networking has to run while nobody is logged in. Files aren't private, so any app can read it.
-- **Running code.** Encryption doesn't protect data from apps running in the same session, because they can reach `session.secretKey` through any code the user runs. See the Security model in [ZOS.md](ZOS.md).
+- **Stored secrets.** The computer's identity seed is stored unencrypted, because networking has to run while nobody is logged in. Files aren't private, so any app can read it. See [TRUST.md](TRUST.md).
+- **Running code.** Encryption doesn't protect data from apps running in the same session, because they can reach `session.secretKey` through any code the user runs. See the [Security model](../ZOS.md#security-model).

@@ -145,7 +145,7 @@ This example covers only the metadata, type and name checks. A complete reader a
 Unlike a .zi file, a .za file describes the whole of its app:
 
 - The image is installed to `/.zos/apps/<id>/`.
-- Installing replaces the app's folder, so files from an older version that aren't in the image are removed. Apps have to keep their data somewhere else, as described in [APP_STANDARDS.md](APP_STANDARDS.md): `/etc/<id>/` or `/home/<user>/.config/<id>/`.
+- Installing replaces the app's folder, so files from an older version that aren't in the image are removed. Apps have to keep their data somewhere else, as described in [APP_STANDARDS.md](../APP_STANDARDS.md): `/etc/<id>/` or `/home/<user>/.config/<id>/`.
 - The files SHOULD be written to a temporary folder first, as `apps.install` does, so that a failed install leaves the old version in place.
 - Each file SHOULD be read back after writing to catch a full disk.
 - Built-in apps in `apps.PROTECTED` can be upgraded but not removed.
@@ -158,6 +158,6 @@ The path rules control where an image's files are written. They don't control wh
 
 ## Limitations
 
-- **No integrity check.** A damaged image that still parses isn't detected. Sizes and hashes have to be carried outside the file, as `zos-apps.manifest` does for `.zapp` files.
+- **No integrity check.** A damaged image that still parses isn't detected. Sizes and hashes have to be carried outside the file, as `zos-apps.manifest` does for release images.
 - **Size.** The image is loaded into memory as a whole, and it's bigger than the files it holds because of the escapes.
 - **No shared files.** An app can't put a file outside its folder at install time, so anything it needs elsewhere has to be created when it runs.

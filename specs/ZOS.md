@@ -8,9 +8,28 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
 Related specifications:
 
-- [ZI_FORMAT.md](ZI_FORMAT.md): the .zi system image format.
-- [ZA_FORMAT.md](ZA_FORMAT.md): the .za app image format.
+- [ZI_FORMAT.md](formats/ZI_FORMAT.md): the .zi system image format.
+- [ZA_FORMAT.md](formats/ZA_FORMAT.md): the .za app image format.
 - [APP_STANDARDS.md](APP_STANDARDS.md): where apps keep their files.
+- [APPMAN.md](APPMAN.md): the `appman` command.
+
+Each system library has its own specification:
+
+| Library    | Specification                    | Provides                                                   |
+| ---------- | -------------------------------- | ---------------------------------------------------------- |
+| `apps`     | [APPS.md](libs/APPS.md)          | Installing, removing and running apps                      |
+| `auth`     | [AUTH.md](libs/AUTH.md)          | Accounts, logins and sessions                              |
+| `crypto`   | [CRYPTO.md](libs/CRYPTO.md)      | Hashing, encryption, key agreement and signatures          |
+| `image`    | [IMAGE.md](libs/IMAGE.md)        | Reading .zi system images                                  |
+| `keys`     | [KEYS.md](libs/KEYS.md)          | Users' key pairs and pinned keys                           |
+| `net`      | [NET.md](libs/NET.md)            | Encrypted messages between computers                       |
+| `printer`  | [PRINTER.md](libs/PRINTER.md)    | Printing text                                              |
+| `services` | [SERVICES.md](libs/SERVICES.md)  | Background services                                        |
+| `system`   | [SYSTEM.md](libs/SYSTEM.md)      | The version, log, settings and boot policy                 |
+| `trust`    | [TRUST.md](libs/TRUST.md)        | The computer's identity, root servers, certificates, names |
+| `ui`       | [UI.md](libs/UI.md)              | The terminal toolkit                                       |
+| `update`   | [UPDATE.md](libs/UPDATE.md)      | Finding and staging updates, and listing release apps      |
+| `util`     | [UTIL.md](libs/UTIL.md)          | Helpers for files, tables, downloads and waiting           |
 
 ## File system layout
 
@@ -19,7 +38,8 @@ Related specifications:
 | `/startup.lua`                 | The bootstrap, which CraftOS runs at boot               |
 | `/.zos/boot.lua`               | The boot sequence                                       |
 | `/.zos/lib/`                   | System libraries                                        |
-| `/.zos/sys/`                   | System screens: login, desktop and settings             |
+| `/.zos/sys/`                   | System screens: setup, login, desktop, settings and recovery |
+| `/.zos/bin/`                   | Shell programs, such as `appman`                        |
 | `/.zos/apps/<id>/`             | Installed apps                                          |
 | `/etc/zos/`                    | System data                                             |
 | `/etc/<id>/`                   | Each app's global data                                  |
@@ -84,11 +104,11 @@ Each account is a user or an administrator. The first account is created during 
 
 Each user has an X25519 key pair, created at their first login. The secret key is encrypted with their password and unlocked into the session at login. Changing your own password keeps the key. If an administrator resets someone's password, the old key is lost and the user gets a new one at their next login.
 
-A session is a table with `user`, `admin`, `since`, `secretKey` and `publicKey`.
+A session is a table with `user`, `admin`, `since`, `secretKey`, `publicKey` and, if an old key couldn't be opened, `keyReplaced`. See [AUTH.md](libs/AUTH.md).
 
 ## Apps
 
-Apps are distributed as .za images and installed to `/.zos/apps/<id>/`. See [ZA_FORMAT.md](ZA_FORMAT.md) and [APP_STANDARDS.md](APP_STANDARDS.md).
+Apps are distributed as .za images and installed to `/.zos/apps/<id>/`. See [ZA_FORMAT.md](formats/ZA_FORMAT.md), [APP_STANDARDS.md](APP_STANDARDS.md) and [APPS.md](libs/APPS.md).
 
 An app contains:
 
@@ -118,7 +138,7 @@ zOS is installed from a setup disk, which runs by itself when a computer without
 
 Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup discards any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
 
-System files are distributed as a .zi image. See [ZI_FORMAT.md](ZI_FORMAT.md).
+System files are distributed as a .zi image. See [ZI_FORMAT.md](formats/ZI_FORMAT.md).
 
 ## Updates
 
@@ -130,7 +150,7 @@ Only versions newer than the installed one are accepted. A version that failed t
 2. **Stage.** The files are stored in `/etc/zos/update/new/`. The `ready` marker is written last, so a boot never sees half an update. `/.zos` isn't touched.
 3. **Apply.** At the next boot, `/startup.lua` swaps the folders before any zOS code loads. Every step is a rename, so an interrupted swap finishes at the following boot.
 4. **Trial.** The old version is kept until the new one proves it can boot. If it crashes first, `/startup.lua` restores the old version and records the failed one.
-5. **Finish.** Once the boot has reached the finish stage, installed apps are updated and the old version is deleted.
+5. **Finish.** Once the boot has reached the finish stage, the old version is deleted and installed apps are updated. App updates that can't be done are tried again by the update service until they work.
 
 Apps MUST NOT be changed before the finish stage, so a rollback doesn't leave them ahead of the system. An update that boots but has bugs later isn't rolled back.
 
@@ -138,7 +158,7 @@ The HTTPS connection to GitHub is the only proof of where an update came from. T
 
 ## Networking
 
-Networking gives apps encrypted, authenticated messages over modems through `require("net")`, with no setup. Packets that fail any check MUST be dropped silently. Payloads MUST be decoded as data and never run, because packets come from anyone.
+Networking gives apps encrypted, authenticated messages over modems through `require("net")`, with no setup. See [NET.md](libs/NET.md) and [TRUST.md](libs/TRUST.md). Packets that fail any check MUST be dropped silently. Payloads MUST be decoded as data and never run, because packets come from anyone.
 
 Each computer has an Ed25519 identity key, owned by the computer and not a user, because networking runs while nobody is logged in. A peer is one of:
 

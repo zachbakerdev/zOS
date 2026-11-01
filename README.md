@@ -300,7 +300,8 @@ each boot and then hourly. An expired certificate just means the computer stops 
 Each name and each computer can hold one certificate on a root server at a time, so a reinstalled
 computer needs its old one revoked first. Its new key is also refused, by the root server and
 everyone else who pinned the old one, until an admin there forgets it under **Trusted keys**.
-Revoking one in the app stops it renewing and frees the name, but the certificate
+Revoking one in the app stops it renewing and frees the name. That computer can't have the name
+back unless the entry is forgotten, but it can ask for a different one. The certificate
 keeps working until it expires, because computers don't check back with the root server. Keep the
 lifetime short if that matters to you.
 
@@ -332,8 +333,8 @@ name from that root, so a second root you trust can't answer for another's hostn
 signs the same name. If two trusted roots claim one top-level domain, lookups in it are refused.
 
 A hostname is taken like any certificate: a computer holds one per root, so a computer already
-certified under another name has to have that entry revoked and forgotten in the Root Server app
-first. To reach a hostname, a computer has to trust its root server, and the root server has to be
+certified under another name has to have that entry revoked in the Root Server app first. It can
+then ask for a different name, which the admin approves as usual. To reach a hostname, a computer has to trust its root server, and the root server has to be
 in range. A root server on the same computer counts: apps on one computer reach each other with the
 same calls, including `net.probe`, without using a modem, so a mail server and a root server can share
 a computer. Trust the root in **Settings** as usual.

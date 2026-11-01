@@ -939,6 +939,7 @@ do
   local key = cryptoOf(a).toHex(select(2, trustOf(a).identity()))
   root.db.setStatus(key, "revoked")
   check("revoked can't renew", sim.call(a, function() return a.net.requestCertificate(entry, "alpha") end), "denied")
+  check("nor in another case", sim.call(a, function() return a.net.requestCertificate(entry, "ALPHA") end), "denied")
   trustOf(b).addRoot(entry.key, entry.name, entry.host)
   check("revoked name is free", sim.call(b, function() return b.net.requestCertificate(entry, "alpha") end), "pending")
 end

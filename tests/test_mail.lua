@@ -234,6 +234,43 @@ do
 end
 reset()
 
+-- Changing hostname: revoke the old one, then ask for another
+do
+  local root = rootServer(10, "Root A")
+  local c = sim.computer(1)
+  local entry = hostname(c, root, "old.root-a")
+  local key = keyOf(c)
+  local function ask(name) return sim.call(c, function() return c.net.requestCertificate(entry, name) end) end
+
+  local status, why = ask("new.root-a")
+  check("has to be revoked first", status, nil)
+  check("says so", has(why, "revoked first"))
+
+  root.db.setStatus(key, "revoked")
+  check("revoked name stays refused", ask("old.root-a"), "denied")
+  check("a new name can be asked for", ask("new.root-a"), "pending")
+  check("the old name can't replace it", ask("old.root-a"), "denied")
+  check("the request is still for the new name", root.db.requests()[key].name, "new.root-a")
+  check("changing the new name still works", ask("newer.root-a"), "pending")
+  check("the old name still can't replace it", ask("old.root-a"), "denied")
+
+  check("approved", approve(root, c, "newer.root-a"), true)
+  check("issued", ask("newer.root-a"), "issued")
+  check("certificate has the new name", trustOf(c).cert(entry.key).name, "newer.root-a")
+  check("nothing left barred", root.db.requests()[key].barred, nil)
+  check("new name resolves", sim.call(c, function() return c.net.resolve("newer.root-a") end).id, c.id)
+
+  -- revoking the new name, or refusing a request, still sticks
+  root.db.setStatus(key, "revoked")
+  check("revoked again", ask("newer.root-a"), "denied")
+  check("can move on again", ask("third.root-a"), "pending")
+  root.db.setStatus(key, "denied")
+  check("a refusal covers every name", ask("fourth.root-a"), "denied")
+  root.db.forget(key)
+  check("forgetting clears it", ask("old.root-a"), "pending")
+end
+reset()
+
 -- Lying about zones and hosts -------------------------------------------------
 
 -- A zone can only be signed by the root it names

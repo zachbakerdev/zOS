@@ -96,7 +96,8 @@ local function manage(entry)
     local action = ui.pager(TITLE .. " - " .. entry.name, showRequest(entry), help, actions)
     ui.screen(TITLE)
     if action == "revoke" then
-        ui.text("Revoke '" .. entry.name .. "'? It can't renew, and the name is free for others. " ..
+        ui.text("Revoke '" .. entry.name .. "'? It can't renew, but can ask for a different name, and " ..
+            "this one is free for others. " ..
             "Its current certificate works until it expires, in up to " .. db.config().days ..
             " days, because computers don't check back with this server.", ui.theme.accent)
         ui.text("")

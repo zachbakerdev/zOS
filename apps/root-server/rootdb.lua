@@ -67,7 +67,7 @@ function db.requests()
 end
 
 -- One computer's request or certificate, by its key. status is "pending", "issued", "denied"
--- or "revoked".
+-- or "revoked". A request made after a revocation keeps the revoked name in `barred`.
 local function setRequest(key, entry)
     local requests = db.requests()
     requests[key] = entry
@@ -165,7 +165,7 @@ function db.approve(key, name, from)
     local entry = db.requests()[key]
     local cert = sign(entry, key) -- yields, so check the request again before saving
     if not asReviewed(key, name, from) then return false, changed end
-    entry.status, entry.cert = "issued", cert
+    entry.status, entry.cert, entry.barred = "issued", cert, nil
     setRequest(key, entry)
     return true
 end
@@ -190,7 +190,11 @@ function db.handle(name, key, from)
     local refused = hostnameRefused(name)
     if refused then return { status = "error", message = refused } end
     local entry = db.requests()[key]
-    if entry and (entry.status == "denied" or entry.status == "revoked") then
+    -- A revoked computer can't have that name back, but can ask for another, which is how a
+    -- hostname changes. Its renewals keep asking for the old name, so that has to stay refused
+    -- for as long as the new request is waiting, or they'd replace it.
+    local barred = entry and (entry.status == "revoked" and entry.name or entry.barred)
+    if entry and (entry.status == "denied" or (barred and barred:lower() == name:lower())) then
         return { status = "denied" }
     end
     if entry and entry.status == "issued" and (entry.name ~= name or entry.from ~= from) then
@@ -219,7 +223,7 @@ function db.handle(name, key, from)
     end
     if pending >= MAX_PENDING then return { status = "error", message = "Too many requests are waiting." } end
 
-    setRequest(key, { name = name, from = from, status = "pending", requested = os.epoch("utc") })
+    setRequest(key, { name = name, from = from, status = "pending", requested = os.epoch("utc"), barred = barred })
     return { status = "pending" }
 end
 

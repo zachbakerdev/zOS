@@ -17,7 +17,7 @@ Apps MUST use `verified`, `expect` or a hostname for anything that matters. An a
 
 A certificate says that a key belongs to a name on a computer id. It lasts for as long as the root server chooses, and computers renew theirs during the last 7 days, starting shortly after boot and then hourly. A computer can hold one per root.
 
-A revoked certificate keeps working until it expires, because computers don't check back with the root server.
+A revoked certificate keeps working until it expires, because computers don't check back with the root server. A revoked key is refused its old name until an admin forgets the entry, but it can request a different name, which needs approving as usual. A denied key is refused every name.
 
 ### Root servers
 

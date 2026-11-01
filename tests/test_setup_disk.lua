@@ -80,6 +80,7 @@ local function start(files, drives, change)
     getMountPath = function(side) return drives[side].mount end,
     getID = function(side) return drives[side].id end,
     getLabel = function(side) return drives[side].label end,
+    setLabel = function(side, label) drives[side].label = label end,
   }
   local isReadOnly = env.fs.isReadOnly
   env.fs.isReadOnly = function(path)
@@ -105,7 +106,8 @@ local function oneDrive() return { left = { mount = "disk", id = 7, label = "Bac
 
 do
   local files = oldDisk()
-  local c = start(files, oneDrive())
+  local drives = oneDrive()
+  local c = start(files, drives)
   check("names the disk", screenHas(c, 'Disk: "Backups" (/disk)'))
   check("counts what's on it", screenHas(c, "It has 3 items on it."))
   check("asks first", screenHas(c, "Erase it and make a setup disk?"))
@@ -118,6 +120,7 @@ do
   check("installer is the startup script", files["disk/startup.lua"] == c.site[INSTALLER])
   check("only those two files", #c.env.fs.list("disk") == 2)
   check("the installer comes from the same release", c.requests[3] == INSTALLER)
+  check("labels the disk with the version", drives.left.label == "zOS v" .. VERSION)
   key(c, "enter")
   check("exits", finished(c))
 end
@@ -138,7 +141,8 @@ end
 
 local function refused(name, change, message, prepare)
   local files = oldDisk()
-  local c = start(files, oneDrive(), change)
+  local drives = oneDrive()
+  local c = start(files, drives, change)
   if prepare then prepare(c) end
   screenHas(c, "Erase it and make a setup disk?")
   char(c, "y")
@@ -147,6 +151,7 @@ local function refused(name, change, message, prepare)
   check(name .. ": disk unchanged", files["disk/old.txt"] == "old" and files["disk/zos.zi"] == nil
     and files["disk/startup.lua"] == nil)
   key(c, "enter")
+  check(name .. ": label unchanged", drives.left.label == "Backups")
   check(name .. ": exits", finished(c))
 end
 

@@ -72,7 +72,8 @@ local function install(pkg)
     local app, err = apps.install(pkg)
     if not app then error(err, 0) end
     log("installed app " .. app.id .. " " .. app.version)
-    print("Installed " .. app.name .. " " .. app.version .. ". It is on the desktop.")
+    print("Installed " .. app.name .. " " .. app.version .. ". It is " ..
+        (app.protected and "on the desktop." or "in the Apps menu."))
 end
 
 -- The latest release's entry for an id, or nil and a reason.

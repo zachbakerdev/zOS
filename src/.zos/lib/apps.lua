@@ -8,7 +8,6 @@ local util = require("util")
 
 local apps = {
     DIR = "/.zos/apps",
-    DEFAULT_PRIORITY = 100,
     FORMAT_VERSION = 1,
     METADATA = "za:metadata",
     PROTECTED = {},
@@ -68,7 +67,6 @@ local function checkManifest(m)
             return nil, "The manifest's " .. field .. " isn't text."
         end
     end
-    if m.priority ~= nil and type(m.priority) ~= "number" then return nil, "The manifest's priority isn't a number." end
     if m.minZos ~= nil and not apps.validVersion(m.minZos) then
         return nil, "The manifest's minZos isn't like 1.0.0."
     end
@@ -144,7 +142,6 @@ local function record(id)
         description = manifest.description or "",
         version = manifest.version,
         author = manifest.author,
-        priority = manifest.priority or apps.DEFAULT_PRIORITY,
         minZos = manifest.minZos,
         admin = manifest.admin == true,
         dir = dir,
@@ -167,8 +164,9 @@ function apps.list()
         end
     end
     table.sort(out, function(a, b)
-        if a.priority ~= b.priority then return a.priority < b.priority end
-        return a.name:lower() < b.name:lower()
+        local x, y = a.name:lower(), b.name:lower()
+        if x ~= y then return x < y end
+        return a.id < b.id
     end)
     return out
 end

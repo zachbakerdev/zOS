@@ -119,7 +119,7 @@ An app contains:
 | `main.lua`     | Required. Runs from the desktop with `...` = `session, app`          |
 | `service.lua`  | Optional. Starts at boot with `...` = `app` and runs in the background |
 
-`require` finds the app's own modules first, then the system libraries. Apps with a lower `priority` are listed and started first. Apps with `admin` set are hidden from users who aren't administrators and refuse to open for them. Their services still run.
+`require` finds the app's own modules first, then the system libraries. Apps are listed and started in order of name, ignoring case. The desktop's first item is Apps, a menu of the apps that aren't built in, which says so if there are none. The built-in apps follow it on the desktop itself. Apps with `admin` set are hidden from users who aren't administrators and refuse to open for them. Their services still run.
 
 App Manager, Terminal and Files are built-in apps. App Manager, Terminal, Setup Disk, Mail Server and Root Server are admin only. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
 

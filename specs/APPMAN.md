@@ -24,7 +24,7 @@ id: notes   by zOS
 Apps can read and change every file on this
 computer. Only install apps you trust.
 Install it? (y/n) y
-Installed Notes 1.2. It is on the desktop.
+Installed Notes 1.2. It is in the Apps menu.
 ```
 
 ## Who can run it

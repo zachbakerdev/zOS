@@ -126,7 +126,8 @@ The folders are in `/etc/zos/update/`. Downloaded and finished updates are logge
 | **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
 | **App Manager** | Admin only. Install and remove apps |
 
-These can be upgraded but not removed. The desktop also has **Settings**, for your password and
+These can be upgraded but not removed, and they're listed on the desktop under **Apps**, which
+opens a menu of every other app. The desktop also has **Settings**, for your password and
 keys, and **About** shows the version and free space. Admins also manage users, root servers,
 updates, secure boot and the computer label there.
 
@@ -156,7 +157,7 @@ folder under `apps/`.
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
-| [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy and writes the latest release's installer and image to it, with any root servers you choose |
+| [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy, writes the latest release's installer and image to it with any root servers you choose, and labels it `zOS vX.X.X` |
 
 ### Making app disks
 
@@ -189,13 +190,13 @@ An app is a folder with a manifest and a main program, installed to `/.zos/apps/
   description = "Shown at the bottom of the desktop",
   version = "1.0.0",       -- required: major.minor.patch
   author = "you",
-  priority = 10,           -- optional: lower comes first (default 100)
   minZos = "1.0.0",        -- optional: the oldest zOS it runs on
   admin = true,            -- optional: only administrators can open it (default false)
 }
 ```
 
-The desktop lists every installed app the user can open. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only
+The desktop's **Apps** menu lists every installed app the user can open, by name, and the built-in
+apps are listed by name on the desktop itself. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only
 the app, never the session. `session` holds `user`, `admin`, `since`, `secretKey` and `publicKey`.
 `require` finds the app's own modules first, then the system libraries, such as `ui`, `apps`, `auth`,
 `crypto`, `keys`, `net` and `system`. See [apps/README.md](apps/README.md) and

@@ -3,7 +3,7 @@
 
 An app's source is a folder, apps/<id>/, holding:
 
-    app.manifest    { name = "Notes", description = "...", version = "1.0.0", priority = 10, minZos = "1.0.0" }
+    app.manifest    { name = "Notes", description = "...", version = "1.0.0", minZos = "1.0.0" }
     main.lua        the program the desktop runs
     service.lua     optional: started at boot to run in the background
     ...             any other files the app needs (modules, data)
@@ -231,8 +231,6 @@ def check_manifest(m):
     for key in ("description", "author"):
         if key in m and not isinstance(m[key], str):
             raise ManifestError(f"{key} must be a string")
-    if "priority" in m and (isinstance(m["priority"], bool) or not isinstance(m["priority"], (int, float))):
-        raise ManifestError("priority must be a number")
     if "minZos" in m and (not isinstance(m["minZos"], str) or not VERSION.fullmatch(m["minZos"])):
         raise ManifestError("minZos must be a major.minor.patch version, like minZos = \"2.1.0\" (in quotes)")
     if "admin" in m and not isinstance(m["admin"], bool):

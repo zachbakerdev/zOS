@@ -20,7 +20,6 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
     name = "Notes",                      -- required
     version = "1.0.0",                   -- required: major.minor.patch
     description = "Write and keep notes", -- shown on the desktop and in App Manager
-    priority = 10,                       -- lower comes first on the desktop and starts first (default 100)
     author = "you",
     minZos = "1.0.0",                    -- optional: the oldest zOS it runs on
     admin = true,                        -- optional: only administrators can open it (default false)

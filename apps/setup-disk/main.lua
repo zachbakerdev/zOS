@@ -231,6 +231,7 @@ local function write(d, release)
         local ok, why = util.writeChecked(fs.combine(d.mount, file[1]), file[2])
         if not ok then error("Couldn't write " .. file[1] .. ": " .. tostring(why), 0) end
     end
+    disk.setLabel(d.side, "zOS v" .. release.version)
 end
 
 local function makeDisk(d)

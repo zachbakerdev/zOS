@@ -64,7 +64,8 @@ local function install(pkg)
         return ui.message(TITLE, "Couldn't install " .. m.name .. ":\n\n" .. err, ui.theme.bad)
     end
     system.log(session.user .. " installed app " .. app.id .. " " .. app.version)
-    ui.message(TITLE, "Installed " .. app.name .. " " .. app.version .. ". It is on the desktop.", ui.theme.good)
+    ui.message(TITLE, "Installed " .. app.name .. " " .. app.version .. ". It is " ..
+        (app.protected and "on the desktop." or "in the Apps menu."), ui.theme.good)
 end
 
 -- Every .za file in the top folder of each floppy.

@@ -298,24 +298,72 @@ local function scenario(width)
   check("no label says so", has(visitor.screenText(), "Label: (none)"))
 end
 
--- Apps that set `admin` are left off the desktop of anyone else.
+-- The desktop has an Apps menu, then the built-in apps. Each is in order of name, and apps that set
+-- `admin` are left off for anyone else.
 do
   for _, c in pairs(sim.computers) do sim.powerOff(c) end
-  local function desktop(id, session)
+  local function install(c, id, manifest, main)
+    c.files[".zos/apps/" .. id .. "/main.lua"] = main or "-- " .. id
+    c.files[".zos/apps/" .. id .. "/app.manifest"] = manifest
+  end
+  local function builtins(c)
+    install(c, "appman", '{ name = "App Manager", version = "1.0.0", admin = true }')
+    install(c, "files", '{ name = "Files", version = "1.0.0" }')
+    install(c, "terminal", '{ name = "Terminal", version = "1.0.0", admin = true }')
+  end
+  local function desktop(id, session, others)
     local c = sim.computer(id)
-    c.files[".zos/apps/open/main.lua"] = "-- open"
-    c.files[".zos/apps/open/app.manifest"] = '{ name = "Open App", version = "1.0.0" }'
-    c.files[".zos/apps/locked/main.lua"] = "-- locked"
-    c.files[".zos/apps/locked/app.manifest"] = '{ name = "Locked App", version = "1.0.0", admin = true }'
+    builtins(c)
+    if others then others(c) end
     runScreen(c, "src/.zos/sys/desktop.lua", session)
     screenHas(c, "Settings")
-    return c.screenText()
+    return c
   end
-  local adminDesktop = desktop(20, { user = "admin", admin = true })
-  check("admins see admin apps", has(adminDesktop, "Open App") and has(adminDesktop, "Locked App"))
-  local userDesktop = desktop(21, { user = "guest", admin = false })
-  check("users see normal apps", has(userDesktop, "Open App"))
-  check("users don't see admin apps", not has(userDesktop, "Locked App"))
+  local function inOrder(c, ...)
+    local at = 0
+    for _, text in ipairs({ ... }) do
+      at = c.screenText():find(text, at + 1, true)
+      if not at then return false end
+    end
+    return true
+  end
+  local function others(c)
+    install(c, "zebra", '{ name = "Zebra", version = "1.0.0", priority = 1 }')
+    install(c, "apple", '{ name = "apple", version = "1.0.0", priority = 99 }',
+      "appleOpened()")
+    install(c, "locked", '{ name = "Locked App", version = "1.0.0", admin = true }')
+  end
+
+  local admin = desktop(20, { user = "admin", admin = true }, others)
+  check("Apps comes first, then the built-in apps by name",
+    inOrder(admin, "Apps", "App Manager", "Files", "Terminal", "Settings"))
+  check("Apps is a submenu", rowEnds(admin, "Apps", ">"))
+  check("other apps aren't on the desktop", not has(admin.screenText(), "Zebra"))
+  key(admin, "enter")
+  check("the menu lists other apps by name, not priority", screenHas(admin, "Zebra")
+    and inOrder(admin, "apple", "Locked App", "Zebra", "Back"))
+  check("built-in apps aren't in the menu", not has(admin.screenText(), "Files"))
+  key(admin, "enter")
+  check("the menu opens an app", screenHas(admin, "appleOpened"))
+  key(admin, "enter")
+  check("the menu comes back after an app", screenHas(admin, "Zebra"))
+  key(admin, "backspace")
+  check("backspace leaves the menu", screenHas(admin, "Settings"))
+
+  local guest = desktop(21, { user = "guest", admin = false }, others)
+  check("users see built-in apps they can open", has(guest.screenText(), "Files"))
+  check("users don't see admin built-in apps", not has(guest.screenText(), "Terminal"))
+  key(guest, "enter")
+  check("users see normal apps", screenHas(guest, "Zebra"))
+  check("users don't see admin apps", not has(guest.screenText(), "Locked App"))
+
+  local empty = desktop(22, { user = "guest", admin = false }, function(c)
+    install(c, "locked", '{ name = "Locked App", version = "1.0.0", admin = true }')
+  end)
+  key(empty, "enter")
+  check("the menu says when there are no apps", screenHas(empty, "No apps installed"))
+  key(empty, "enter")
+  check("leaving the empty menu", screenHas(empty, "Settings"))
 
   local adminOnly = { appman = true, terminal = true, ["setup-disk"] = true, ["mail-server"] = true, ["root-server"] = true }
   for _, id in ipairs({ "appman", "terminal", "setup-disk", "mail-server", "root-server", "files", "fileshare", "mail" }) do

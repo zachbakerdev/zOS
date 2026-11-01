@@ -1,8 +1,7 @@
 {
     name = "App Manager",
     description = "Install, update and remove apps",
-    version = "1.0.1",
+    version = "1.0.2",
     author = "zOS",
-    priority = 90,
     admin = true,
 }

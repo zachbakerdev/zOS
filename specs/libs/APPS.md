@@ -81,7 +81,7 @@ Returns whether `path` can be a file in an app: relative, at most 128 bytes, and
 
 ### Manifests
 
-`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `priority` MUST be a number, `minZos` MUST be a version, and `admin` MUST be a boolean.
+`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `minZos` MUST be a version, and `admin` MUST be a boolean.
 
 A version MUST be exactly three whole numbers, major, minor and patch, separated by dots, such as `"1.0.0"`. Nothing else is a version: `"1.0"`, `"1.0.0.0"`, `"v1.0.0"` and `"1.0.0-beta"` are all refused.
 
@@ -90,7 +90,6 @@ A version MUST be exactly three whole numbers, major, minor and patch, separated
 | Name                    | Value                                                   |
 | ----------------------- | ------------------------------------------------------- |
 | `apps.DIR`              | `/.zos/apps`, where apps are installed                  |
-| `apps.DEFAULT_PRIORITY` | 100, the priority of an app that doesn't set one        |
 | `apps.FORMAT_VERSION`   | 1, the version of the .za format it reads               |
 | `apps.METADATA`         | `"za:metadata"`, the metadata key                       |
 | `apps.PROTECTED`        | The ids of the built-in apps, as (id -> true)           |
@@ -106,7 +105,6 @@ Installed apps are described by an app record, which is also what `main.lua` rec
 | `description` | string  | Its description, or `""`                                       |
 | `version`     | string  | Its version                                                    |
 | `author`      | string  | Its author, or `nil`                                           |
-| `priority`    | number  | Its priority. Defaults to `apps.DEFAULT_PRIORITY`, which is 100 |
 | `minZos`      | string  | The oldest zOS it runs on, or `nil`                            |
 | `admin`       | boolean | Whether only administrators can open it. Defaults to false     |
 | `dir`         | string  | Its folder, as an absolute path                                |
@@ -116,7 +114,7 @@ Installed apps are described by an app record, which is also what `main.lua` rec
 
 ### apps.list()
 
-Returns every valid installed app, lowest priority first, then by name. A folder with a bad id or manifest, or with no `main.lua`, is skipped without an error.
+Returns every valid installed app in order of name, ignoring case, and then of id. A folder with a bad id or manifest, or with no `main.lua`, is skipped without an error.
 
 ### apps.get(id)
 
@@ -181,7 +179,7 @@ Starts `service.lua` with `...` = `app`, under the app's id, as described in [SE
 
 ### apps.startServices()
 
-Starts the service of every installed app, in priority order. The boot sequence calls it once.
+Starts the service of every installed app, in `apps.list` order. The boot sequence calls it once.
 
 ## Security
 

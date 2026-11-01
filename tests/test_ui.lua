@@ -374,6 +374,44 @@ do
   end
 end
 
+-- The loading bar
+for _, width in ipairs({ 51, 26 }) do
+  for _, c in pairs(sim.computers) do sim.powerOff(c) end
+  local c = sim.computer(30, { width = width })
+  local ui = c.env.require("ui")
+  local function rowOf(y)
+    local at = 0
+    for row in (c.screenText() .. "\n"):gmatch("(.-)\n") do
+      at = at + 1
+      if at == y then return (row:gsub("%s+$", "")) end
+    end
+  end
+  local function draw(...)
+    local args = { n = select("#", ...), ... }
+    sim.call(c, function() ui.loadingBar(unpack(args, 1, args.n)) end)
+  end
+
+  sim.call(c, function() ui.screen("Bar") end)
+  draw(5, 0, 0, "Nothing")
+  check("no total draws nothing", rowOf(5) == "" and rowOf(6) == "")
+  draw(5, 0, nil, "Nothing")
+  check("no known total draws nothing", rowOf(5) == "" and rowOf(6) == "")
+
+  c.env.term.setCursorPos(2, 3)
+  draw(5, 0, 4, "A long label that goes on and on and on and on and on and on and on")
+  local room = width - 7
+  check("an empty bar", rowOf(5) == " " .. string.rep("-", room) .. "   0%")
+  check("the label fits on its row", #rowOf(6) == width - 1)
+  check("the cursor stays", select(2, c.env.term.getCursorPos()) == 3)
+  draw(5, 2, 4, "Half")
+  local half = math.floor(room / 2)
+  check("half full", rowOf(5) == " " .. string.rep("=", half) .. string.rep("-", room - half) .. "  50%")
+  check("the old label is replaced", rowOf(6) == " Half")
+  draw(5, 9, 4)
+  check("never overflows", rowOf(5) == " " .. string.rep("=", room) .. " 100%")
+  check("without a label its row stays", rowOf(6) == " Half")
+end
+
 scenario(51)
 scenario(26) -- pocket computer
 

@@ -591,6 +591,51 @@ local function powerCuts(name, text, finalBoot)
   check(name .. ": tried every step", n > 2)
 end
 
+-- Progress ---------------------------------------------------------------------------
+
+do -- Only the apps that need something count, and the steps reach the end.
+  local c = setup(installed({
+    [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0.0" }',
+    [".zos/apps/same/main.lua"] = "old", [".zos/apps/same/app.manifest"] = '{ name = "same", version = "2.0.0" }',
+  }))
+  c.publish(imageText(c))
+  publishApps(c, { mine = "2.0.0", same = "2.0.0", other = "2.0.0" })
+
+  local info = call(c, c.update.check)
+  local stored = {}
+  check("download: works with progress", call(c, c.update.download, info, function(done, total)
+    stored[#stored + 1] = done .. "/" .. total
+  end))
+  check("download: counts the system, startup and marker",
+    table.concat(stored, " ") == "0/4 1/4 2/4 3/4 4/4")
+
+  boot(c)
+  c.env.require("system").VERSION = NEXT
+  local steps = {}
+  call(c, c.update.finish, function(done, total, label)
+    steps[#steps + 1] = done .. "/" .. total .. " " .. label
+  end)
+  check("finish: reports the app that's due", table.concat(steps, ", ") ==
+    "0/1 Updating App mine, 1/1 Apps updated")
+  check("finish: the app was updated", c.files[".zos/apps/mine/main.lua"] == "print('hi')")
+end
+
+do -- Nothing to do means no progress at all, with apps due or not.
+  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "2.0.0" }' }))
+  publishApps(c, { mine = "2.0.0" })
+  local calls = 0
+  local function count() calls = calls + 1 end
+  call(c, c.update.finish, count)
+  check("finish: nothing due, no progress", calls == 0 and not c.fetched[APPS_MANIFEST])
+  c.files["etc/zos/update/apps-due"] = "9.0.0"
+  call(c, c.update.finish, count)
+  check("finish: nothing out of date, no progress", calls == 0 and c.fetched[APPS_MANIFEST] == 1)
+  c.site[APPS_MANIFEST] = nil
+  c.files["etc/zos/update/apps-due"] = "9.0.0"
+  call(c, c.update.finish, count)
+  check("finish: offline, no progress", calls == 0)
+end
+
 powerCuts("update", function(c) return imageText(c) end, "-- new boot")
 powerCuts("rollback", function(c) return imageText(c, { ["/.zos/boot.lua"] = "-- broken boot" }) end, "-- old boot")
 

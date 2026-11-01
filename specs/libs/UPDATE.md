@@ -47,7 +47,7 @@ There's one `app=` line for each app, with its fields separated by tabs. `minZos
 | Method                    | Returns                                                         |
 | ------------------------- | --------------------------------------------------------------- |
 | `update.check()`          | `{ version, size, sha256 }` if there's a newer version, or false if not |
-| `update.download(info)`   | True. Downloads, checks and stages the version from `check`     |
+| `update.download(info, onProgress)` | True. Downloads, checks and stages the version from `check` |
 | `update.stagedVersion()`  | The version waiting for the next boot, or nil. No error message |
 | `update.failedVersion()`  | The version that failed to boot and was rolled back, or nil. No error message |
 | `update.discard()`        | Nothing. Deletes what's staged                                  |
@@ -64,7 +64,7 @@ There's one `app=` line for each app, with its fields separated by tabs. `minZos
 6. Forgets that this version failed, if it did, since someone has chosen to try it again.
 7. Writes the `ready` marker, last of all, so that a boot never sees half an update.
 
-Nothing under `/.zos` is touched.
+Nothing under `/.zos` is touched. `onProgress(done, total)` is optional, and is called as step 5 and step 7 store each file.
 
 ## Apps in the release
 
@@ -97,14 +97,16 @@ These methods belong to the system, and apps MUST NOT call them.
 
 | Method                 | Returns                                                                |
 | ---------------------- | ---------------------------------------------------------------------- |
-| `update.finish()`      | Nothing. The boot sequence calls it once the new version has got far enough to count as good |
-| `update.finishApps()`  | Nothing. Does any app updates that are due                             |
+| `update.finish(onProgress)` | Nothing. The boot sequence calls it once the new version has got far enough to count as good |
+| `update.finishApps(onProgress)` | Nothing. Does any app updates that are due                    |
 | `update.tick()`        | Nothing. One round of the update service                               |
 | `update.service()`     | Doesn't return. The update service, which runs as `zos:update`         |
 
 If this boot is the trial of an update, `finish` replaces `/startup.lua`, marks the app updates as due, and deletes the old version. It then calls `finishApps`. Apps come last, so that trouble with them can't roll the system back.
 
 `finishApps` upgrades each installed app that has a newer version in the latest release, and installs any protected app that's missing. It doesn't install other new apps or install older versions. If any of this fails, for example because the computer is offline, the updates stay due and are tried again by the service.
+
+`onProgress(done, total, label)` is optional, and is called before each app and once after the last. It isn't called if no app needs anything, so the boot only shows a loading bar when there are apps to update.
 
 `tick` calls `finishApps`. Unless automatic updates are off, it then looks for a new version and downloads it, skipping a version that's already staged or that failed. Failures are logged.
 

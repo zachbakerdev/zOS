@@ -1,4 +1,4 @@
--- The terminal UI toolkit: screens, wrapped text, menus, prompts and a pager.
+-- The terminal UI toolkit: screens, wrapped text, menus, prompts, a pager and a loading bar.
 
 local ui = {}
 
@@ -87,6 +87,26 @@ function ui.text(text, color)
         y = y + 1
     end
     term.setCursorPos(2, y)
+end
+
+-- Draw a loading bar across row y, with an optional label on the row below it, and leave the cursor
+-- where it was. Draws nothing unless total is above 0, so there's no bar with nothing to load.
+function ui.loadingBar(y, done, total, label)
+    if not total or total <= 0 then return end
+    local width = term.getSize()
+    local x, cursorY = term.getCursorPos()
+    local share = math.max(0, math.min(done / total, 1))
+    local percent = (" %3d%%"):format(math.floor(share * 100))
+    local room = math.max(1, width - 2 - #percent)
+    local full = math.floor(share * room)
+    ui.at(2, y, string.rep("=", full), theme.accent)
+    ui.at(2 + full, y, string.rep("-", room - full), theme.dim)
+    ui.at(2 + room, y, percent)
+    if label then
+        local text = tostring(label):sub(1, width - 2)
+        ui.at(2, y + 1, text .. string.rep(" ", width - 1 - #text), theme.dim)
+    end
+    term.setCursorPos(x, cursorY)
 end
 
 -- Ask for a line of text. mask hides what's typed. Returns "" if nothing was entered.

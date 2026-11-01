@@ -404,8 +404,11 @@ local function updates()
                 end
                 if not ui.confirm("Download it?") then return end
                 ui.text("Downloading...", ui.theme.dim)
+                local _, row = term.getCursorPos()
                 local ok
-                ok, err = update.download(info)
+                ok, err = update.download(info, function(stored, total)
+                    ui.loadingBar(row, stored, total, "Storing the update")
+                end)
                 if not ok then return fail(err) end
                 done("It will install the next time this computer restarts.")
             end },

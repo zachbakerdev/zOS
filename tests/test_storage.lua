@@ -307,6 +307,51 @@ do
   check("settings: back saves nothing", not config(c).allowed.spare)
 end
 
+-- Reading the chests shows a loading bar, but only if there are chests to read.
+do
+  local function barsDuring(world, press)
+    local c = start(world)
+    local seen = {}
+    local listed = {}
+    local real = c.env.peripheral.call
+    c.env.peripheral = setmetatable({
+      call = function(name, method, ...)
+        if method == "list" and not listed[name] then
+          listed[name] = true
+          seen[#seen + 1] = c.screenText()
+        end
+        return real(name, method, ...)
+      end,
+    }, { __index = c.env.peripheral })
+    if press then press(c) end
+    return c, seen
+  end
+
+  local c, seen = barsDuring({ net = { a = chest(27), b = chest(27), d = chest(27), e = chest(27) } })
+  check("loading: reaches the setup screen", screenHas(c, "I/O chest"))
+  local shown = table.concat(seen, "\n")
+  check("loading: says what it's doing", shown:find("Looking for chests", 1, true) ~= nil)
+  check("loading: shows the bar", shown:find("50%", 1, true) ~= nil and shown:find("=-", 1, true) ~= nil)
+  check("loading: counts the chests", shown:find("Read 2 of 4 chests", 1, true) ~= nil)
+
+  local empty = barsDuring({})
+  check("loading: no chests", screenHas(empty, "No chests found"))
+  check("loading: nothing to draw", empty.screenText():find("---", 1, true) == nil)
+
+  local c2 = start({ net = { a = chest(27), b = chest(27) } })
+  local steps = {}
+  local function read()
+    c2.env.require("array").discover(function(done, total) steps[#steps + 1] = done .. "/" .. total end)
+  end
+  sim.call(c2, read)
+  check("loading: steps reach the end", table.concat(steps, " ") == "0/2 1/2 2/2")
+
+  local c3 = start({})
+  local called = false
+  sim.call(c3, function() c3.env.require("array").discover(function() called = true end) end)
+  check("loading: no progress without chests", not called)
+end
+
 -- Storing ------------------------------------------------------------------------------------------
 
 do

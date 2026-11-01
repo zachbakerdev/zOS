@@ -84,7 +84,8 @@ local function stage(path, data)
 end
 
 -- Download, check and stage a version. Nothing in /.zos is touched: the swap happens at boot.
-function update.download(info)
+-- onProgress(done, total) is called as the files are stored.
+function update.download(info, onProgress)
     local text, err = util.get(releaseUrl(info.version, "zos.zi"), true)
     if not text then return nil, "The download failed: " .. err end
     if #text ~= info.size then return nil, "The download is the wrong size." end
@@ -100,20 +101,34 @@ function update.download(info)
         return nil, "There isn't enough disk space."
     end
 
-    update.discard()
-    for path, data in pairs(files) do
-        -- Apps change at the finish stage and arrive as .za images, so a rollback can't leave
-        -- them ahead of the system.
+    -- Apps change at the finish stage and arrive as .za images, so a rollback can't leave them
+    -- ahead of the system.
+    local toStage = {}
+    for path in pairs(files) do
         if path:sub(1, 6) == "/.zos/" and path:sub(1, 11) ~= "/.zos/apps/" then
-            local ok, why = stage(NEW .. path:sub(6), data)
-            if not ok then return nil, why end
+            toStage[#toStage + 1] = path
         end
+    end
+
+    local total = #toStage + 2 -- and /startup.lua and the ready marker
+    local function report(done)
+        if onProgress then onProgress(done, total) end
+    end
+
+    update.discard()
+    report(0)
+    for i, path in ipairs(toStage) do
+        local ok, why = stage(NEW .. path:sub(6), files[path])
+        if not ok then return nil, why end
+        report(i)
     end
     local ok, why = stage(STARTUP, files["/startup.lua"])
     if not ok then return nil, why end
+    report(total - 1)
     if fs.exists(FAILED) and util.readFile(FAILED) == info.version then fs.delete(FAILED) end
     ok, why = stage(READY, info.version) -- last, so a boot never sees half an update
     if not ok then return nil, why end
+    report(total)
     system.log("Update " .. info.version .. " is ready")
     return true
 end
@@ -184,33 +199,40 @@ end
 -- Finish stage ---------------------------------------------------------------------------------
 
 -- Upgrade installed apps and install any protected app that's missing. Returns whether every one
--- got done.
-local function updateApps()
+-- got done. onProgress(done, total, label) isn't called if no app needs anything.
+local function updateApps(onProgress)
     local list, err = update.checkApps()
     if not list then
         system.log("Couldn't list the apps in the release: " .. tostring(err))
         return false
     end
-    local complete = true
+    local due = {}
     for _, entry in ipairs(list) do
         if entry.supported and (entry.newer or (not entry.current and apps.PROTECTED[entry.id])) then
-            local pkg, why = update.downloadApp(entry)
-            local installed = pkg
-            if pkg then installed, why = apps.install(pkg) end
-            if not installed then
-                system.log("Couldn't update " .. entry.id .. ": " .. tostring(why))
-                complete = false
-            end
+            due[#due + 1] = entry
         end
     end
+
+    local complete = true
+    for i, entry in ipairs(due) do
+        if onProgress then onProgress(i - 1, #due, "Updating " .. entry.name) end
+        local pkg, why = update.downloadApp(entry)
+        local installed = pkg
+        if pkg then installed, why = apps.install(pkg) end
+        if not installed then
+            system.log("Couldn't update " .. entry.id .. ": " .. tostring(why))
+            complete = false
+        end
+    end
+    if onProgress and #due > 0 then onProgress(#due, #due, "Apps updated") end
     return complete
 end
 
 -- Do any app updates that are due. They stay due until they all work, so a computer that was
 -- offline when the update finished catches up later.
-function update.finishApps()
+function update.finishApps(onProgress)
     if not fs.exists(APPS_DUE) then return end
-    local ok, complete = pcall(updateApps)
+    local ok, complete = pcall(updateApps, onProgress)
     if not ok then
         system.log("Updating apps failed: " .. tostring(complete))
     elseif complete then
@@ -220,7 +242,7 @@ end
 
 -- The boot has got far enough to count as good. Replace /startup.lua, delete the old version, then
 -- update the apps. Apps come last, so that trouble with them can't roll the system back.
-function update.finish()
+function update.finish(onProgress)
     if fs.exists(TRIAL) then
         local version = util.readFile(TRIAL)
         if fs.exists(STARTUP) then
@@ -234,7 +256,7 @@ function update.finish()
         fs.delete(TRIAL)
         system.log("Updated to zOS " .. tostring(version))
     end
-    update.finishApps()
+    update.finishApps(onProgress)
 end
 
 -- One round of the background service.

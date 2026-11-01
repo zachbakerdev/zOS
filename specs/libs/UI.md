@@ -1,6 +1,6 @@
 # zOS UI Library Specification
 
-`require("ui")` is the terminal toolkit used by system screens and apps: screens, wrapped text, prompts, menus and a pager.
+`require("ui")` is the terminal toolkit used by system screens and apps: screens, wrapped text, prompts, menus, a pager and a loading bar.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -78,6 +78,21 @@ local choice = ui.menu({
 
 ```lua
 local action = ui.pager("Message", text, "R: reply  Q: back", { r = "reply" })
+```
+
+## The loading bar
+
+`ui.loadingBar(y, done, total, label)` draws a bar across row `y`, filled to `done` out of `total`, with the percentage at its end. `label`, if given, replaces row `y + 1`. Call it again with the same `y` to move the bar on. The cursor stays where it was.
+
+Nothing is drawn unless `total` is above 0, and a bar SHOULD only be shown for real work that can be counted, so that one never appears with nothing to load. The filled part is `=` and the rest is `-`, so it doesn't rely on colour.
+
+```lua
+ui.text("Reading files...")
+local _, row = term.getCursorPos()
+for i, path in ipairs(paths) do
+    ui.loadingBar(row, i - 1, #paths, path)
+    read(path)
+end
 ```
 
 ## Events

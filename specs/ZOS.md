@@ -75,12 +75,12 @@ Each system library has its own specification:
 
 ### Boot sequence
 
-`/.zos/boot.lua` runs these stages in order, showing a splash screen:
+`/.zos/boot.lua` runs these stages in order, showing each on a splash screen:
 
 1. Apply the boot policy.
 2. Load the system libraries.
 3. Start networking. A failure here is logged and MUST NOT stop the boot.
-4. Finish any update.
+4. Finish any update. If there are apps to update, the splash screen shows a loading bar for them.
 5. Start app services and the update service.
 
 It then runs the session loop alongside the services, so services keep running while nobody is logged in. A session is one cycle of login, desktop and logout. If a session crashes, the error is logged, the user is logged out and the loop continues.

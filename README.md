@@ -228,6 +228,9 @@ The first time it runs, it asks for two things, and **Settings** changes them la
   run. Anything added later starts unticked, and the app never touches a chest that isn't ticked.
   **Find a chest** finds one in the list when you change its contents.
 
+A loading bar shows how far it has got while it reads the connected chests, which takes a while on a
+large network.
+
 A chest next to the computer needs its own wired modem too, because CC: Tweaked can't move items
 between a chest attached by its side and one on a network. If that chest is empty, it looks like
 every other empty chest, so the app asks you to put an item in it. With no network at all, the
@@ -484,7 +487,8 @@ CraftOS bios -> shell -> /startup.lua -> /.zos/boot.lua -> login -> desktop
   prompt, where an admin login opens a recovery shell, and then reboots. It never falls through
   to an open shell.
 - **`/.zos/boot.lua`** secures the boot settings, loads the libraries, adds `/.zos/bin` to the
-  shell path and scans the installed apps, with a progress bar. It then loops login → desktop →
+  shell path and scans the installed apps. It shows a loading bar only when an update has apps to
+  install. It then loops login → desktop →
   logout forever. An error anywhere logs you out instead of crashing the computer.
 
 ### Accounts

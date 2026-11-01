@@ -55,27 +55,33 @@ end
 -- What's connected, as (chests that can be used, chests beside the computer that can't). Each has
 -- name, type, size, used and networks; a chest that's also beside the computer has side. An unusable one
 -- has candidates: how many chests it could be, if it does have a modem and is just empty.
-function array.discover()
+-- onProgress(done, total) is called as each one is read, and not at all if there aren't any.
+function array.discover(onProgress)
     local networked, sides, usable, unlinked = reach(), {}, {}, {}
     local bySignature = {}
 
+    local inventories = {}
     for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.hasType(name, "inventory") then
-            local sig, used = signature(name)
-            if sig then
-                local chest = {
-                    name = name, type = peripheral.getType(name), used = used, size = ask(name, "size"), sig = sig,
-                }
-                if networked[name] then
-                    chest.networks = networked[name]
-                    usable[#usable + 1] = chest
-                    bySignature[sig] = bySignature[sig] or {}
-                    table.insert(bySignature[sig], chest)
-                else
-                    sides[#sides + 1] = chest
-                end
+        if peripheral.hasType(name, "inventory") then inventories[#inventories + 1] = name end
+    end
+
+    if onProgress and #inventories > 0 then onProgress(0, #inventories) end
+    for i, name in ipairs(inventories) do
+        local sig, used = signature(name)
+        if sig then
+            local chest = {
+                name = name, type = peripheral.getType(name), used = used, size = ask(name, "size"), sig = sig,
+            }
+            if networked[name] then
+                chest.networks = networked[name]
+                usable[#usable + 1] = chest
+                bySignature[sig] = bySignature[sig] or {}
+                table.insert(bySignature[sig], chest)
+            else
+                sides[#sides + 1] = chest
             end
         end
+        if onProgress then onProgress(i, #inventories) end
     end
 
     if #usable == 0 then

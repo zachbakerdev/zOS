@@ -146,7 +146,13 @@ end
 -- Wait until something is connected. Returns false if the user went back.
 local function waitForChests()
     while true do
-        local chests, unlinked = array.discover()
+        ui.screen(TITLE .. " - Setup")
+        ui.text("Looking for chests...")
+        ui.text("")
+        local _, row = term.getCursorPos()
+        local chests, unlinked = array.discover(function(done, total)
+            ui.loadingBar(row, done, total, "Read " .. done .. " of " .. plural(total, "chest"))
+        end)
         if #chests > 0 then return chests, unlinked end
         local choice = ui.menu({
             title = TITLE .. " - No chests found",

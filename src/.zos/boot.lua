@@ -32,7 +32,13 @@ end
 
 local require = libEnv.require
 
-local function splash(title, step, total)
+-- The bar goes under the splash's title, for the steps that have something to show.
+local function barRow()
+    local _, height = term.getSize()
+    return math.floor(height / 2) + 3
+end
+
+local function splash(title)
     local width, height = term.getSize()
     term.setBackgroundColor(colors.black)
     term.clear()
@@ -42,29 +48,26 @@ local function splash(title, step, total)
     term.setTextColor(colors.lightGray)
     term.setCursorPos(math.max(1, math.floor((width - #title) / 2)), math.floor(height / 2) + 1)
     term.write(title)
-    local full = math.floor(step / total * (width - 8))
-    term.setCursorPos(5, math.floor(height / 2) + 3)
-    term.write(string.rep("=", full) .. string.rep("-", width - 8 - full))
 end
 
 -- 1. Apply the boot policy, before anything that could fail.
-splash("Securing boot", 1, 5)
+splash("Securing boot")
 local system = require("system")
 system.applyBootPolicy()
 
 -- 2. Load the system libraries.
-splash("Loading libraries", 2, 5)
+splash("Loading libraries")
 local apps = require("apps")
 local services = require("services")
 local update = require("update")
 local auth = require("auth")
 require("crypto")
-require("ui")
+local ui = require("ui")
 
 if shell then shell.setPath(shell.path() .. ":" .. ROOT .. "/bin") end
 
 -- 3. Start networking. A failure here must not stop the boot.
-splash("Starting networking", 3, 5)
+splash("Starting networking")
 local ok, err = pcall(function() require("net").start() end)
 if not ok then system.log("Networking didn't start: " .. tostring(err)) end
 
@@ -108,12 +111,14 @@ end
 
 -- 4. Finish any update. This is what proves that the new version boots, so a failure in the
 -- steps above rolls it back, and a failure here doesn't.
-splash("Finishing updates", 4, 5)
-ok, err = pcall(update.finish)
+splash("Finishing updates")
+ok, err = pcall(update.finish, function(done, total, label)
+    ui.loadingBar(barRow(), done, total, label)
+end)
 if not ok then system.log("Finishing the update failed: " .. tostring(err)) end
 
 -- 5. Start app services and the update service.
-splash("Starting services", 5, 5)
+splash("Starting services")
 apps.startServices()
 services.start("zos:update", update.service)
 

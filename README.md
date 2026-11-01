@@ -233,8 +233,11 @@ between a chest attached by its side and one on a network. If that chest is empt
 every other empty chest, so the app asks you to put an item in it. With no network at all, the
 chests touching the computer are used instead.
 
-**Store all** empties the I/O chest into storage. **Recall item** searches by name or item id, then
-fills the I/O chest with that item until it's full or there are none left. Take what you need, then
+**Store all** empties the I/O chest into storage. **Recall item** lists what's stored and narrows the
+list as you type, matching letters of the name or item id in order, so `irin` finds Iron Ingot. The up
+and down arrows move the highlight, which starts on the best match, Enter picks it, and Backspace
+cancels once the text is empty. The app then fills the I/O chest with that item until it's full or
+there are none left. Take what you need, then
 press **Return items to storage**, which puts back what's left of the recalled items. It's the only
 way on from that screen. If the app is stopped first, the items stay in the I/O chest until the next
 **Store all**.

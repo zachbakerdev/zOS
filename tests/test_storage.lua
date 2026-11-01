@@ -27,7 +27,18 @@ local function screenHas(c, text)
 end
 
 local function key(c, name) c.env.os.queueEvent("key", c.env.keys[name]) end
-local function typed(c, line) c.env.os.queueEvent("sim_line", line) end
+local function typed(c, text)
+  for letter in text:gmatch(".") do c.env.os.queueEvent("char", letter) end
+end
+
+-- The screen row a piece of text is on.
+local function rowOf(c, text)
+  local y = 0
+  for line in (c.screenText() .. "\n"):gmatch("(.-)\n") do
+    y = y + 1
+    if line:find(text, 1, true) then return y end
+  end
+end
 
 local function finished(c)
   sim.run(function() return c.thread.done end, 30)
@@ -159,7 +170,7 @@ local function recallFirst(c, search)
   key(c, "home")
   key(c, "down")
   key(c, "enter")
-  screenHas(c, "Search by name")
+  screenHas(c, "Item:")
   typed(c, search)
 end
 
@@ -348,6 +359,7 @@ do
   local b = chest(27, { { "minecraft:iron_ingot", 36 } })
   local c = ready(io, a, b)
   recallFirst(c, "iron in")
+  screenHas(c, "1/2")
   check("search: matches the readable name", screenHas(c, "Iron Ingot x100"))
   check("search: leaves out others", not c.screenText():find("Dirt", 1, true))
   key(c, "enter")
@@ -379,12 +391,7 @@ do
   check("full: stops at the chest's size", screenHas(c, "Recalled 64 Iron Ingot."))
   check("full: says what's left", screenHas(c, "128 stayed in storage"))
   check("full: left in storage", total(a) == 128 and total(io, "minecraft:dirt") == 7)
-  local row, y = nil, 0
-  for line in (c.screenText() .. "\n"):gmatch("(.-)\n") do
-    y = y + 1
-    if line:find("Return items", 1, true) then row = y end
-  end
-  c.env.os.queueEvent("mouse_click", 1, 5, row)
+  c.env.os.queueEvent("mouse_click", 1, 5, rowOf(c, "Return items"))
   check("return by click", screenHas(c, "Stored 64 items"))
   check("return: leaves what was already there", total(a) == 192 and total(io, "minecraft:dirt") == 7)
 end
@@ -406,6 +413,7 @@ do
   local a = chest(27, { { "minecraft:diamond_sword", 1, "aaa" }, { "minecraft:diamond_sword", 1, "bbb" } })
   local c = ready(io, a, chest(27))
   recallFirst(c, "named bbb")
+  screenHas(c, "1/2")
   check("nbt: found by display name", screenHas(c, "Named bbb x1"))
   check("nbt: only that one", not c.screenText():find("Named aaa", 1, true))
   key(c, "enter")
@@ -419,16 +427,100 @@ do
   check("blank search lists all", screenHas(c, "A x1") and screenHas(c, "B x1"))
   key(c, "backspace")
   check("back from results", screenHas(c, "Store all"))
-  recallFirst(c, "nothing like this")
-  check("no matches", screenHas(c, "Nothing in storage matches"))
+  recallFirst(c, "zzz")
+  check("no matches", screenHas(c, "Nothing matches that"))
+  key(c, "enter")
+  key(c, "down")
+  sim.advance(1)
+  check("no matches: enter picks nothing", screenHas(c, "Nothing matches that"))
+  key(c, "backspace") key(c, "backspace") key(c, "backspace")
+  check("backspace edits the text", screenHas(c, "A x1"))
+  key(c, "backspace")
+  check("backspace on empty text cancels", screenHas(c, "Store all"))
+end
+
+-- Letters only have to appear in order, and the best fit comes first and starts highlighted.
+do
+  local io = chest(27)
+  local a = chest(27, {
+    { "minecraft:iron_ingot", 3 }, { "minecraft:string", 4 }, { "minecraft:diamond", 5 }, { "minecraft:iron_block", 6 },
+  })
+  local c = ready(io, a, chest(27))
+  recallFirst(c, "irin")
+  screenHas(c, "1/4")
+  check("fuzzy: letters in order", screenHas(c, "Iron Ingot x3"))
+  check("fuzzy: leaves out others", not c.screenText():find("Diamond", 1, true))
+  key(c, "backspace") key(c, "backspace") key(c, "backspace") key(c, "backspace")
+  screenHas(c, "4/4")
+  typed(c, "ing")
+  screenHas(c, "2/4")
+  check("fuzzy: a whole word beats letters in a word", rowOf(c, "Iron Ingot x3") < rowOf(c, "String x4"))
+  check("fuzzy: starts on the first", screenHas(c, "minecraft:iron_ingot"))
+  key(c, "down")
+  check("arrows: move down", screenHas(c, "minecraft:string"))
+  key(c, "down")
+  check("arrows: wrap", screenHas(c, "minecraft:iron_ingot"))
+  key(c, "up")
+  check("arrows: wrap back", screenHas(c, "minecraft:string"))
+  typed(c, "o")
+  check("typing goes back to the first", screenHas(c, "minecraft:iron_ingot"))
+  key(c, "backspace")
+  key(c, "down")
+  screenHas(c, "minecraft:string")
+  key(c, "enter")
+  check("enter recalls the highlighted one", screenHas(c, "Recalled 4 String"))
+  check("recall: moved it", total(io, "minecraft:string") == 4 and total(io, "minecraft:iron_ingot") == 0)
+end
+
+-- Holding backspace clears the text, but takes another press to leave.
+do
+  local c = ready(chest(27), chest(27, { { "x:a", 1 } }), chest(27))
+  recallFirst(c, "a")
+  screenHas(c, "1/1")
+  c.env.os.queueEvent("key", c.env.keys.backspace, true)
+  c.env.os.queueEvent("key", c.env.keys.backspace, true)
+  check("held backspace stays", screenHas(c, "Backspace: cancel"))
+  sim.advance(1)
+  check("held backspace doesn't cancel", screenHas(c, "Item:"))
+  key(c, "backspace")
+  check("a new press does", screenHas(c, "Store all"))
+end
+
+-- Long lists scroll, and a click takes the row under it.
+do
+  local stacks = {}
+  for i = 1, 20 do stacks[i] = { ("x:item%02d"):format(i), i } end
+  local io = chest(27)
+  local c = ready(io, chest(27, stacks), chest(27))
+  recallFirst(c, "")
+  screenHas(c, "Item01 x1")
+  for _ = 1, 15 do key(c, "down") end
+  check("scrolls to the highlight", screenHas(c, "Item16 x16"))
+  check("scrolls the top away", not c.screenText():find("Item01", 1, true))
+  c.env.os.queueEvent("mouse_click", 1, 5, rowOf(c, "Item16 x16"))
+  check("click picks the row", screenHas(c, "Recalled 16 Item16"))
+end
+
+do
+  local c = ready(chest(27), chest(27), chest(27))
+  screenHas(c, "Store all")
+  key(c, "home") key(c, "down") key(c, "enter")
+  check("empty storage: says so", screenHas(c, "There's nothing in storage"))
+end
+
+do
+  local c, world = ready(chest(27), chest(27, { { "x:a", 1 } }), chest(27))
+  world.gone.b = true
+  recallFirst(c, "zzz")
+  check("offline: said when nothing matches", screenHas(c, "1 storage chest didn't respond"))
 end
 
 -- Chests that weren't allowed are left alone.
 do
   local other = chest(27, { { "x:secret", 9 } })
-  local c = ready(chest(27), chest(27), chest(27), { other = other })
+  local c = ready(chest(27), chest(27, { { "x:a", 1 } }), chest(27), { other = other })
   recallFirst(c, "secret")
-  check("not allowed: not searched", screenHas(c, "Nothing in storage matches"))
+  check("not allowed: not searched", screenHas(c, "Nothing matches that"))
   check("not allowed: untouched", total(other) == 9)
 end
 

@@ -281,22 +281,95 @@ local function recallItem(config, item)
     ui.message(TITLE, storedText(returned), returned.left > 0 and ui.theme.bad or ui.theme.good)
 end
 
-local function recall(config)
-    ui.screen(TITLE .. " - Recall")
-    ui.text("Search by name, or leave it blank to list everything.", ui.theme.dim)
-    local text = ui.input("Item")
-    ui.text("Searching...")
-    local found, offline = array.search(config, text)
-    if #found == 0 then
-        return ui.message(TITLE, "Nothing in storage matches that." .. offlineNote({ offline = offline }), ui.theme.bad)
+-- Filter `stored` as the user types. Returns the chosen item, or nil if they cancelled.
+local function chooseItem(stored, offline)
+    local LABEL = "Item: "
+    local FIRST_ROW = 5
+    local text, found = "", stored
+    local selected, top = 1, 1
+
+    local function setText(value)
+        text, found = value, array.match(stored, value)
+        selected, top = 1, 1
     end
 
-    local items = {}
-    for i, item in ipairs(found) do
-        items[i] = { label = item.name .. " x" .. item.count, hint = item.id }
+    term.setCursorBlink(true)
+    while true do
+        local width, height = term.getSize()
+        local lastRow = height - 2
+        local rows = math.max(1, lastRow - FIRST_ROW + 1)
+        if selected < top then top = selected end
+        if selected >= top + rows then top = selected - rows + 1 end
+
+        ui.screen(TITLE .. " - Recall", #found .. "/" .. #stored)
+        for i = 0, rows - 1 do
+            local item = found[top + i]
+            if not item then break end
+            local chosen = top + i == selected
+            local label = (item.name .. " x" .. item.count):sub(1, width - 2)
+            ui.at(1, FIRST_ROW + i, " " .. label .. string.rep(" ", width - #label - 1),
+                chosen and ui.theme.selectFg or ui.theme.fg, chosen and ui.theme.selectBg or ui.theme.bg)
+        end
+        if #found == 0 then ui.at(2, FIRST_ROW, "Nothing matches that.", ui.theme.bad) end
+        if text == "" then ui.at(2, height - 1, "Backspace: cancel", ui.theme.dim) end
+
+        local hint = found[selected] and found[selected].id
+        if not hint and offline > 0 then hint = plural(offline, "storage chest") .. " didn't respond." end
+        if hint then ui.at(2, height, hint:sub(1, width - 2), ui.theme.dim) end
+
+        -- Last, so that the cursor is left at the end of the text.
+        local shown = text:sub(-math.max(1, width - #LABEL - 3))
+        ui.at(2, 3, LABEL, ui.theme.accent)
+        ui.at(2 + #LABEL, 3, shown)
+
+        local event, a, b, c = os.pullEvent()
+        if event == "char" or event == "paste" then
+            setText(text .. a)
+        elseif event == "key" then
+            if a == keys.backspace then
+                -- Holding it to clear the text stops there, instead of leaving the screen too.
+                if text ~= "" then
+                    setText(text:sub(1, -2))
+                elseif not b then
+                    term.setCursorBlink(false)
+                    return nil
+                end
+            elseif #found > 0 then
+                if a == keys.up then
+                    selected = selected > 1 and selected - 1 or #found
+                elseif a == keys.down then
+                    selected = selected < #found and selected + 1 or 1
+                elseif a == keys.pageUp then
+                    selected = math.max(1, selected - rows)
+                elseif a == keys.pageDown then
+                    selected = math.min(#found, selected + rows)
+                elseif a == keys.enter or a == keys.numPadEnter then
+                    term.setCursorBlink(false)
+                    return found[selected]
+                end
+            end
+        elseif event == "mouse_scroll" and #found > 0 then
+            selected = math.max(1, math.min(#found, selected + a))
+        elseif event == "mouse_click" then
+            local item = c >= FIRST_ROW and c <= lastRow and found[top + c - FIRST_ROW]
+            if item then
+                term.setCursorBlink(false)
+                return item
+            end
+        end
     end
-    local choice = ui.menu({ title = TITLE .. " - Recall", items = items, back = true })
-    if choice then recallItem(config, found[choice]) end
+end
+
+local function recall(config)
+    ui.screen(TITLE .. " - Recall")
+    ui.text("Searching...")
+    local stored, offline = array.items(config)
+    if #stored == 0 then
+        return ui.message(TITLE, "There's nothing in storage." .. offlineNote({ offline = offline }), ui.theme.bad)
+    end
+
+    local item = chooseItem(stored, offline)
+    if item then recallItem(config, item) end
 end
 
 local function main()

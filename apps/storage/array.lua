@@ -184,20 +184,67 @@ local function scan(config)
     return chests, items, offline
 end
 
--- The items whose name or id contains `text`, sorted by name, and how many chests didn't answer.
-function array.search(config, text)
+local function byName(a, b)
+    if a.name ~= b.name then return a.name < b.name end
+    return a.key < b.key
+end
+
+-- Everything in storage, sorted by name, and how many chests didn't answer.
+function array.items(config)
     local _, items, offline = scan(config)
-    local needle, found = text:lower(), {}
-    for _, item in pairs(items) do
-        if item.name:lower():find(needle, 1, true) or item.id:lower():find(needle, 1, true) then
+    local found = {}
+    for _, item in pairs(items) do found[#found + 1] = item end
+    table.sort(found, byName)
+    return found, offline
+end
+
+local function startsWord(text, at)
+    return at == 1 or not text:sub(at - 1, at - 1):find("%w")
+end
+
+-- How well lower-case `text` fits, or 0 if it doesn't. `phrase` appearing whole beats its letters
+-- being scattered, and is best at the start of a word. Scattered letters are best close together.
+local function fuzzyScore(text, phrase, letters)
+    local best, at = 0, text:find(phrase, 1, true)
+    while at do
+        best = math.max(best, (startsWord(text, at) and 2000 or 1000) - at)
+        at = text:find(phrase, at + 1, true)
+    end
+    if best > 0 then return best end
+
+    local first, last
+    for i = 1, #letters do
+        last = text:find(letters:sub(i, i), (last or 0) + 1, true)
+        if not last then return 0 end
+        first = first or last
+    end
+    return math.max(1, 500 - (last - first))
+end
+
+-- The `items` that fit `text`, best first. Their letters must appear in order in the name or id, but
+-- not together. Every id shares a few namespaces, so only a literal match counts for that part.
+function array.match(items, text)
+    local phrase = text:lower()
+    local letters = phrase:gsub("%s", "")
+    if letters == "" then return items end
+
+    local scores, found = {}, {}
+    for _, item in ipairs(items) do
+        local id = item.id:lower()
+        local score = math.max(
+            fuzzyScore(item.name:lower(), phrase, letters),
+            fuzzyScore(id:match(":(.*)$") or id, phrase, letters),
+            id:find(phrase, 1, true) and 1 or 0)
+        if score > 0 then
+            scores[item] = score
             found[#found + 1] = item
         end
     end
     table.sort(found, function(a, b)
-        if a.name ~= b.name then return a.name < b.name end
-        return a.key < b.key
+        if scores[a] ~= scores[b] then return scores[a] > scores[b] end
+        return byName(a, b)
     end)
-    return found, offline
+    return found
 end
 
 -- Moving items -----------------------------------------------------------------------------------

@@ -25,6 +25,16 @@ local function byName(chests, name)
     end
 end
 
+-- Start a loading bar below the text on screen, and return the function that moves it on.
+local function progressBar()
+    ui.text("")
+    local _, row = term.getCursorPos()
+    return function(done, total, kind)
+        local verb = kind == "chest" and "Read " or "Moved "
+        ui.loadingBar(row, done, total, verb .. done .. " of " .. plural(total, kind))
+    end
+end
+
 -- Setup ------------------------------------------------------------------------------------------
 
 local NO_MODEM = "The chest next to the computer can't reach the network. Put a wired modem on the " ..
@@ -121,6 +131,33 @@ local function chooseStorage(draft, chests, unlinked)
     end
 end
 
+-- Forget storage chests that have gone. Nothing changes until the setup screen saves.
+local function removeDisconnected(draft, chests, unlinked)
+    local selected = 1
+    while true do
+        local missing = array.missing(draft, chests, unlinked)
+        if #missing == 0 then return end
+
+        local items = {}
+        for i, name in ipairs(missing) do
+            items[i] = { label = name, hint = "Remove it. Items inside stay in the chest" }
+        end
+        items[#items + 1] = { label = "Remove all", hint = "Items inside stay in the chests" }
+        items[#items + 1] = { label = "Done" }
+
+        local choice = ui.menu({
+            title = TITLE .. " - Disconnected chests", items = items, selected = selected, back = true,
+        })
+        if not choice or choice == #items then return end
+        if choice == #items - 1 then
+            for _, name in ipairs(missing) do draft.allowed[name] = nil end
+            return
+        end
+        draft.allowed[missing[choice]] = nil
+        selected = math.min(choice, #missing - 1)
+    end
+end
+
 -- The chest beside the computer, if there's one to default to. Asks for help if it can't tell.
 local function defaultIo(chests, unlinked)
     if #unlinked == 0 then
@@ -148,11 +185,7 @@ local function waitForChests()
     while true do
         ui.screen(TITLE .. " - Setup")
         ui.text("Looking for chests...")
-        ui.text("")
-        local _, row = term.getCursorPos()
-        local chests, unlinked = array.discover(function(done, total)
-            ui.loadingBar(row, done, total, "Read " .. done .. " of " .. plural(total, "chest"))
-        end)
+        local chests, unlinked = array.discover(progressBar())
         if #chests > 0 then return chests, unlinked end
         local choice = ui.menu({
             title = TITLE .. " - No chests found",
@@ -187,25 +220,31 @@ local function setup(config)
             end
         end
 
-        local choice = ui.menu({
-            title = TITLE .. " - Setup",
-            selected = selected,
-            back = true,
-            items = {
-                {
-                    label = "I/O chest: " .. (draft.io or "not set"), submenu = true,
-                    hint = "Where items go in and come out",
-                },
-                { label = "Storage chests: " .. count, submenu = true, hint = "Which chests can hold items" },
-                { label = "Save" },
+        local items = {
+            {
+                label = "I/O chest: " .. (draft.io or "not set"), submenu = true,
+                hint = "Where items go in and come out",
             },
-        })
+            { label = "Storage chests: " .. count, submenu = true, hint = "Which chests can hold items" },
+        }
+        local missing = array.missing(draft, chests, unlinked)
+        if #missing > 0 then
+            items[#items + 1] = {
+                label = "Disconnected chests: " .. #missing, submenu = true,
+                hint = "Remove chests that are no longer connected",
+            }
+        end
+        items[#items + 1] = { label = "Save" }
+
+        local choice = ui.menu({ title = TITLE .. " - Setup", selected = selected, back = true, items = items })
         selected = choice or selected
         if not choice then return nil end
         if choice == 1 then
             chooseIo(draft, chests, unlinked)
         elseif choice == 2 then
             chooseStorage(draft, chests, unlinked)
+        elseif choice < #items then
+            removeDisconnected(draft, chests, unlinked)
         elseif not draft.io then
             ui.message(TITLE, "Choose an I/O chest first.", ui.theme.bad)
         elseif count == 0 then
@@ -243,7 +282,7 @@ end
 local function storeAll(config)
     ui.screen(TITLE)
     ui.text("Storing items...")
-    local result = array.store(config)
+    local result = array.store(config, nil, nil, progressBar())
     if not result then return ui.message(TITLE, NO_IO, ui.theme.bad) end
     ui.message(TITLE, storedText(result), result.left > 0 and ui.theme.bad or ui.theme.good)
 end
@@ -269,7 +308,7 @@ end
 local function recallItem(config, item)
     ui.screen(TITLE)
     ui.text("Recalling " .. item.name .. "...")
-    local result = array.recall(config, item.key)
+    local result = array.recall(config, item.key, progressBar())
     if not result then return ui.message(TITLE, NO_IO, ui.theme.bad) end
     if result.moved == 0 then
         local reason = result.left > 0 and "The I/O chest is full." or "There are none left in storage."
@@ -282,7 +321,7 @@ local function recallItem(config, item)
 
     ui.screen(TITLE)
     ui.text("Returning items...")
-    local returned = array.store(config, item.key, result.moved)
+    local returned = array.store(config, item.key, result.moved, progressBar())
     if not returned then return ui.message(TITLE, NO_IO, ui.theme.bad) end
     ui.message(TITLE, storedText(returned), returned.left > 0 and ui.theme.bad or ui.theme.good)
 end
@@ -369,7 +408,7 @@ end
 local function recall(config)
     ui.screen(TITLE .. " - Recall")
     ui.text("Searching...")
-    local stored, offline = array.items(config)
+    local stored, offline = array.items(config, progressBar())
     if #stored == 0 then
         return ui.message(TITLE, "There's nothing in storage." .. offlineNote({ offline = offline }), ui.theme.bad)
     end

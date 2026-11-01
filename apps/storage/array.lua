@@ -55,7 +55,7 @@ end
 -- What's connected, as (chests that can be used, chests beside the computer that can't). Each has
 -- name, type, size, used and networks; a chest that's also beside the computer has side. An unusable one
 -- has candidates: how many chests it could be, if it does have a modem and is just empty.
--- onProgress(done, total) is called as each one is read, and not at all if there aren't any.
+-- onProgress(done, total, "chest") is called as each one is read, and not at all if there aren't any.
 function array.discover(onProgress)
     local networked, sides, usable, unlinked = reach(), {}, {}, {}
     local bySignature = {}
@@ -65,7 +65,7 @@ function array.discover(onProgress)
         if peripheral.hasType(name, "inventory") then inventories[#inventories + 1] = name end
     end
 
-    if onProgress and #inventories > 0 then onProgress(0, #inventories) end
+    if onProgress and #inventories > 0 then onProgress(0, #inventories, "chest") end
     for i, name in ipairs(inventories) do
         local sig, used = signature(name)
         if sig then
@@ -81,7 +81,7 @@ function array.discover(onProgress)
                 sides[#sides + 1] = chest
             end
         end
-        if onProgress then onProgress(i, #inventories) end
+        if onProgress then onProgress(i, #inventories, "chest") end
     end
 
     if #usable == 0 then
@@ -109,6 +109,25 @@ function array.connected(a, b)
         if b.networks[modem] then return true end
     end
     return false
+end
+
+-- The allowed chests that discover didn't find, sorted by name. A chest found under another name,
+-- or that's there but can't be used, is still connected. The I/O chest is replaced, not removed.
+function array.missing(config, chests, unlinked)
+    local found = {}
+    for _, list in ipairs({ chests, unlinked }) do
+        for _, chest in ipairs(list) do
+            found[chest.name] = true
+            if chest.side then found[chest.side] = true end
+        end
+    end
+
+    local names = {}
+    for name in pairs(config.allowed) do
+        if not found[name] and name ~= config.io then names[#names + 1] = name end
+    end
+    table.sort(names)
+    return names
 end
 
 -- The current signature of each chest in each list, by name.
@@ -159,7 +178,8 @@ end
 
 -- Every allowed chest that answers, and how many didn't. Each chest has name, free and holds.
 -- Items are (key -> { key, id, name, count, slots = { { chest, slot, count } } }).
-local function scan(config)
+-- onProgress(done, total, "chest") is called as each one is read, and not at all if there aren't any.
+local function scan(config, onProgress)
     local names = {}
     for name in pairs(config.allowed) do
         if name ~= config.io then names[#names + 1] = name end
@@ -167,7 +187,8 @@ local function scan(config)
     table.sort(names)
 
     local chests, items, offline = {}, {}, 0
-    for _, name in ipairs(names) do
+    if onProgress and #names > 0 then onProgress(0, #names, "chest") end
+    for i, name in ipairs(names) do
         local contents, size = ask(name, "list"), ask(name, "size")
         if contents and size then
             local chest = { name = name, free = size, holds = {} }
@@ -186,6 +207,7 @@ local function scan(config)
         else
             offline = offline + 1
         end
+        if onProgress then onProgress(i, #names, "chest") end
     end
     return chests, items, offline
 end
@@ -196,8 +218,8 @@ local function byName(a, b)
 end
 
 -- Everything in storage, sorted by name, and how many chests didn't answer.
-function array.items(config)
-    local _, items, offline = scan(config)
+function array.items(config, onProgress)
+    local _, items, offline = scan(config, onProgress)
     local found = {}
     for _, item in pairs(items) do found[#found + 1] = item end
     table.sort(found, byName)
@@ -288,42 +310,49 @@ end
 
 -- Move the I/O chest's items into the array: all of them, or at most `limit` of the item `key`.
 -- Returns { moved, left, offline }, where left didn't fit, or nil if the I/O chest has gone.
-function array.store(config, key, limit)
+-- onProgress is called as for scan, and then with (done, total, "stack") as each stack is moved.
+function array.store(config, key, limit, onProgress)
     local contents = ask(config.io, "list")
     if not contents then return nil end
-    local chests, _, offline = scan(config)
+    local chests, _, offline = scan(config, onProgress)
+
+    local slots = {}
+    for _, slot in ipairs(sortedSlots(contents)) do
+        if not key or keyOf(contents[slot]) == key then slots[#slots + 1] = slot end
+    end
 
     local moved, wanted = 0, 0
-    for _, slot in ipairs(sortedSlots(contents)) do
+    if onProgress and #slots > 0 then onProgress(0, #slots, "stack") end
+    for i, slot in ipairs(slots) do
         local item = contents[slot]
-        local itemKey = keyOf(item)
-        if not key or itemKey == key then
-            local count = item.count
-            if limit then count = math.min(count, limit - wanted) end
-            if count > 0 then
-                wanted = wanted + count
-                moved = moved + pushToArray(chests, config.io, slot, itemKey, count)
-            end
+        local count = item.count
+        if limit then count = math.min(count, limit - wanted) end
+        if count > 0 then
+            wanted = wanted + count
+            moved = moved + pushToArray(chests, config.io, slot, keyOf(item), count)
         end
+        if onProgress then onProgress(i, #slots, "stack") end
     end
     return { moved = moved, left = wanted - moved, offline = offline }
 end
 
 -- Move as many of the item `key` as fit into the I/O chest. Returns { moved, left, offline }, where
--- left stayed in the array, or nil if the I/O chest has gone.
-function array.recall(config, key)
+-- left stayed in the array, or nil if the I/O chest has gone. onProgress is called as for array.store.
+function array.recall(config, key, onProgress)
     if not ask(config.io, "size") then return nil end
-    local _, items, offline = scan(config)
+    local _, items, offline = scan(config, onProgress)
     local item = items[key]
     if not item then return { moved = 0, left = 0, offline = offline } end
 
     local moved = 0
-    for _, place in ipairs(item.slots) do
+    if onProgress then onProgress(0, #item.slots, "stack") end
+    for i, place in ipairs(item.slots) do
         local count = ask(place.chest, "pushItems", config.io, place.slot)
         if count then
             moved = moved + count
             if count < place.count then break end -- the I/O chest is full
         end
+        if onProgress then onProgress(i, #item.slots, "stack") end
     end
     return { moved = moved, left = item.count - moved, offline = offline }
 end

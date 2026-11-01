@@ -352,6 +352,72 @@ do
   check("loading: no progress without chests", not called)
 end
 
+-- Removing chests that have gone from the settings.
+do
+  local function settings(c)
+    screenHas(c, "Store all")
+    key(c, "down") key(c, "down") key(c, "enter")
+    screenHas(c, "I/O chest: io")
+  end
+
+  local c = ready(chest(27), chest(27), chest(27))
+  settings(c)
+  check("disconnected: hidden with nothing to remove", not c.screenText():find("Disconnected", 1, true))
+
+  local world = { net = { io = chest(27), a = chest(27), b = chest(27) } }
+  c = start(world)
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true, gone1 = true, gone2 = true, gone3 = true } })
+  settings(c)
+  check("disconnected: counted", screenHas(c, "Disconnected chests: 3"))
+  check("disconnected: doesn't count towards storage", screenHas(c, "Storage chests: 1"))
+  key(c, "down") key(c, "down") key(c, "enter")
+  check("disconnected: lists them", screenHas(c, "gone2"))
+  key(c, "down") key(c, "enter")
+  sim.advance(1)
+  check("disconnected: removes one", screenHas(c, "gone3") and not c.screenText():find("gone2", 1, true))
+  key(c, "down") key(c, "down") key(c, "enter")
+  check("disconnected: done goes back", screenHas(c, "Disconnected chests: 2"))
+  check("disconnected: not saved yet", config(c).allowed.gone2)
+  key(c, "enter")
+  screenHas(c, "Remove all")
+  key(c, "down") key(c, "down") key(c, "enter")
+  check("disconnected: the entry goes with the last one", screenHas(c, "Save"))
+  sim.advance(1)
+  check("disconnected: all removed", not c.screenText():find("Disconnected", 1, true))
+  key(c, "home") key(c, "up") key(c, "enter")
+  screenHas(c, "Store all")
+  local cfg = config(c)
+  check("disconnected: saved", not cfg.allowed.gone1 and not cfg.allowed.gone2 and not cfg.allowed.gone3)
+  check("disconnected: keeps the others", cfg.allowed.a)
+end
+
+-- Going back throws the removal away, and a missing I/O chest is left to be replaced.
+do
+  local world = { net = { io = chest(27), a = chest(27) } }
+  local c = start(world)
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "gone", allowed = { a = true, b = true } })
+  screenHas(c, "Store all")
+  key(c, "down") key(c, "down") key(c, "enter")
+  check("disconnected: one left", screenHas(c, "Disconnected chests: 1"))
+  key(c, "down") key(c, "down") key(c, "enter")
+  screenHas(c, "Remove all")
+  key(c, "down") key(c, "enter")
+  sim.advance(1)
+  screenHas(c, "I/O chest: gone")
+  check("disconnected: removed for now", not c.screenText():find("Disconnected", 1, true))
+  key(c, "backspace")
+  screenHas(c, "Store all")
+  check("disconnected: back saves nothing", config(c).allowed.b)
+end
+
+-- A chest that's found by another name, or that's there but can't be used, hasn't gone.
+do
+  local c = start({})
+  local missing = c.env.require("array").missing({ io = "io", allowed = { left = true, right = true, far = true } },
+    { { name = "chest0", side = "left" } }, { { name = "right" } })
+  check("missing: only what wasn't found", #missing == 1 and missing[1] == "far")
+end
+
 -- Storing ------------------------------------------------------------------------------------------
 
 do
@@ -394,6 +460,62 @@ do
   screenHas(c, "Store all")
   key(c, "enter")
   check("no I/O chest: says so", screenHas(c, "isn't connected"))
+end
+
+-- Storing and recalling read the chests and then move items, with a bar for each.
+do
+  local function watch(c)
+    local seen = {}
+    local real = c.env.peripheral.call
+    c.env.peripheral = setmetatable({
+      call = function(name, method, ...)
+        if method == "list" or method == "pushItems" then seen[#seen + 1] = c.screenText() end
+        return real(name, method, ...)
+      end,
+    }, { __index = c.env.peripheral })
+    return seen
+  end
+  local function saw(seen, text)
+    return table.concat(seen, "\n"):find(text, 1, true) ~= nil
+  end
+
+  local io = chest(27, { { "x:a", 1 }, { "x:b", 1 } })
+  local c = ready(io, chest(27), chest(27))
+  local seen = watch(c)
+  screenHas(c, "Store all")
+  key(c, "enter")
+  screenHas(c, "Stored 2 items")
+  check("store bar: says what it's doing", saw(seen, "Storing items"))
+  check("store bar: reads the chests", saw(seen, "Read 1 of 2 chests"))
+  check("store bar: moves the stacks", saw(seen, "Moved 1 of 2 stacks"))
+  check("store bar: draws the bar", saw(seen, "50%"))
+
+  local c2 = ready(chest(27), chest(27, { { "x:a", 64 }, { "x:a", 64 } }), chest(27, { { "x:b", 1 } }))
+  local seen2 = watch(c2)
+  recallFirst(c2, "a")
+  check("recall bar: searching reads the chests", saw(seen2, "Read 1 of 2 chests"))
+  screenHas(c2, "A x128")
+  for i = #seen2, 1, -1 do seen2[i] = nil end
+  key(c2, "enter")
+  screenHas(c2, "Recalled 128 A")
+  check("recall bar: says what it's doing", saw(seen2, "Recalling A"))
+  check("recall bar: moves the stacks", saw(seen2, "Moved 1 of 2 stacks"))
+  for i = #seen2, 1, -1 do seen2[i] = nil end
+  key(c2, "enter")
+  screenHas(c2, "Stored 128 items")
+  check("return bar: says what it's doing", saw(seen2, "Returning items"))
+  check("return bar: moves the stacks", saw(seen2, "Moved 1 of 2 stacks"))
+
+  local c3 = ready(chest(27, { { "x:a", 1 }, { "x:b", 1 } }), chest(27, { { "x:a", 1 } }), chest(27))
+  local steps = {}
+  sim.call(c3, function()
+    local array = c3.env.require("array")
+    array.store(array.load() or { io = "io", allowed = { a = true, b = true } }, "x:a#nil", nil, function(done, total, kind)
+      steps[#steps + 1] = done .. "/" .. total .. kind
+    end)
+  end)
+  check("store bar: counts only what it'll move",
+    table.concat(steps, " ") == "0/2chest 1/2chest 2/2chest 0/1stack 1/1stack")
 end
 
 -- Recalling ----------------------------------------------------------------------------------------

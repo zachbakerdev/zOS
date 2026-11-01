@@ -228,8 +228,13 @@ The first time it runs, it asks for two things, and **Settings** changes them la
   run. Anything added later starts unticked, and the app never touches a chest that isn't ticked.
   **Find a chest** finds one in the list when you change its contents.
 
-A loading bar shows how far it has got while it reads the connected chests, which takes a while on a
-large network.
+A chest that's been disconnected stays in the settings, in case it's only away for now. Once it's
+gone for good, **Settings** shows **Disconnected chests**, which removes it, one at a time or all
+together, when you save. Any items inside it stay there. This entry only appears when a storage chest
+is missing. To replace a missing I/O chest, choose another under **I/O chest**.
+
+A loading bar shows how far it has got while it reads the chests or moves items, which takes a while
+on a large network.
 
 A chest next to the computer needs its own wired modem too, because CC: Tweaked can't move items
 between a chest attached by its side and one on a network. If that chest is empty, it looks like

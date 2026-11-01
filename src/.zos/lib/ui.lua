@@ -149,7 +149,7 @@ function ui.confirm(question)
     end
 end
 
--- A scrolling list. options: title, status, items ({ label, hint, fg }), selected, back.
+-- A scrolling list. options: title, status, items ({ label, hint, fg, submenu }), selected, back.
 -- Returns the chosen index, or nil if back is set and the user went back.
 function ui.menu(options)
     local items = options.items
@@ -170,8 +170,9 @@ function ui.menu(options)
             local chosen = top + i == selected
             local fg = chosen and theme.selectFg or item.fg or theme.fg
             local bg = chosen and theme.selectBg or theme.bg
-            local label = item.label:sub(1, width - 2)
-            ui.at(1, firstRow + i, " " .. label .. string.rep(" ", width - #label - 1), fg, bg)
+            local marker = item.submenu and "> " or ""
+            local label = item.label:sub(1, width - 2 - #marker)
+            ui.at(1, firstRow + i, " " .. label .. string.rep(" ", width - #label - 1 - #marker) .. marker, fg, bg)
         end
         local hint = items[selected] and items[selected].hint
         if hint then ui.at(2, height, tostring(hint):sub(1, width - 2), theme.dim) end

@@ -9,6 +9,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 Related specifications:
 
 - [ZI_FORMAT.md](formats/ZI_FORMAT.md): the .zi system image format.
+- [ZR_FORMAT.md](formats/ZR_FORMAT.md): the .zr file of root servers on a setup disk.
 - [ZA_FORMAT.md](formats/ZA_FORMAT.md): the .za app image format.
 - [APP_STANDARDS.md](APP_STANDARDS.md): where apps keep their files.
 - [APPMAN.md](APPMAN.md): the `appman` command.
@@ -96,7 +97,7 @@ Secure boot is on by default. An admin MAY turn it off in Settings after enterin
 
 ## Users
 
-Each account is a user or an administrator. The first account is created during setup and is an administrator. Only administrators can manage users, install or remove apps, and change system settings.
+Each account is a user or an administrator. The first account is created during setup and is an administrator. Only administrators can manage users, install or remove apps, change system settings, and open apps whose manifest sets `admin`. Files keeps other users in their home folder.
 
 - Passwords MUST be at least 8 characters.
 - Passwords MUST be stored only as salted, iterated hashes.
@@ -118,9 +119,9 @@ An app contains:
 | `main.lua`     | Required. Runs from the desktop with `...` = `session, app`          |
 | `service.lua`  | Optional. Starts at boot with `...` = `app` and runs in the background |
 
-`require` finds the app's own modules first, then the system libraries. Apps with a lower `priority` are listed and started first.
+`require` finds the app's own modules first, then the system libraries. Apps with a lower `priority` are listed and started first. Apps with `admin` set are hidden from users who aren't administrators and refuse to open for them. Their services still run.
 
-App Manager, Terminal and Files are built-in apps. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
+App Manager, Terminal and Files are built-in apps. App Manager, Terminal, Setup Disk, Mail Server and Root Server are admin only. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
 
 ### Services
 
@@ -139,6 +140,8 @@ zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it
 The first boot creates the administrator after an install or clean reinstall. Each thing it asks for has a label and a colon, with a `>` before the input on the next line. Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup replaces any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
 
 System files are distributed as a .zi image. See [ZI_FORMAT.md](formats/ZI_FORMAT.md).
+
+A setup disk MAY have a .zr file next to the image, listing root servers to trust. Setup MUST check it before changing anything, and a person MUST accept each root after choosing a mode. See [ZR_FORMAT.md](formats/ZR_FORMAT.md).
 
 ## Updates
 

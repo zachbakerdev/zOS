@@ -1,4 +1,4 @@
--- Settings: passwords, keys, users, secure boot, the network, updates and the computer's label.
+-- Settings: the account and security pages, updates, the computer's label and About.
 
 local auth = require("auth")
 local crypto = require("crypto")
@@ -18,8 +18,8 @@ local DAY = 24 * 3600 * 1000
 local function fail(text) ui.message(TITLE, text, ui.theme.bad) end
 local function done(text) ui.message(TITLE, text, ui.theme.good) end
 
--- Run a list of { label, hint, action } until Back. `build` is called each time, so counts stay
--- right. An item without an action ends the menu.
+-- Run a list of { label, hint, action, submenu } until Back. `build` is called each time, so counts
+-- stay right. An item without an action ends the menu. Items that open another page set `submenu`.
 local function page(title, build)
     local selected = 1
     while true do
@@ -125,6 +125,7 @@ local function users()
         for _, entry in ipairs(auth.list()) do
             items[#items + 1] = {
                 label = entry.name .. (entry.admin and "  (admin)" or ""),
+                submenu = true,
                 action = function() manageUser(entry) end,
             }
         end
@@ -132,7 +133,17 @@ local function users()
     end)
 end
 
--- Keys ------------------------------------------------------------------------------------------
+local function account()
+    page("Account", function()
+        local items = { { label = "Change my password", action = changePassword } }
+        if session.admin then
+            items[#items + 1] = { label = "Users", submenu = true, action = users }
+        end
+        return items
+    end)
+end
+
+-- Security --------------------------------------------------------------------------------------
 
 local function trustedKeys()
     page("Trusted keys", function()
@@ -161,12 +172,10 @@ local function encryptionKeys()
             { label = "My key", hint = "Your fingerprint", action = function()
                 ui.pager("My key", "Fingerprint:\n" .. crypto.fingerprint(session.publicKey))
             end },
-            { label = "Trusted keys (" .. #keys.knownList() .. ")", hint = "Keys pinned by address", action = trustedKeys },
+            { label = "Trusted keys (" .. #keys.knownList() .. ")", hint = "Keys pinned by address", submenu = true, action = trustedKeys },
         }
     end)
 end
-
--- Secure boot -----------------------------------------------------------------------------------
 
 local function secureBoot()
     if not needAdmin() then return end
@@ -183,7 +192,7 @@ local function secureBoot()
     done("Secure boot is " .. (on and "off" or "on") .. ".")
 end
 
--- Network ---------------------------------------------------------------------------------------
+-- Root servers and certificates -----------------------------------------------------------------
 
 local function daysLeft(cert)
     return math.floor((cert.expires - os.epoch("utc")) / DAY)
@@ -213,9 +222,9 @@ local function certRecord(cert)
     }, "\n\n")
 end
 
-local function thisComputer()
+local function computerIdentity()
     local _, public = trust.identity()
-    ui.pager("This computer", "Name: " .. trust.defaultName() .. "\nComputer: " .. os.getComputerID() ..
+    ui.pager("Computer identity", "Name: " .. trust.defaultName() .. "\nComputer: " .. os.getComputerID() ..
         "\n\nFingerprint:\n" .. crypto.fingerprint(public) .. "\n\nCertificates: " .. #trust.certs())
 end
 
@@ -224,7 +233,7 @@ local function requestCertificate(root, name)
     while true do
         ui.screen("Certificate")
         ui.text("Asking " .. root.name .. "...", ui.theme.dim)
-        ui.text("The server's admin has to approve this. Your fingerprint is under This computer.", ui.theme.dim)
+        ui.text("The server's admin has to approve this. Your fingerprint is under Computer identity.", ui.theme.dim)
         ui.text("Backspace stops waiting.", ui.theme.dim)
         local status, err = net.requestCertificate(root, name)
         if status == "issued" then
@@ -311,7 +320,9 @@ local function addRoot()
     ui.text("Anyone can announce a server under any name. Compare this fingerprint with the one the server shows.", ui.theme.dim)
     ui.text("")
     if not ui.confirm("Trust this root server?") then return end
-    trust.addRoot(entry.key, entry.name, entry.host)
+    ui.text("Checking its top-level domain...", ui.theme.dim)
+    local ok, why = net.addRoot(entry)
+    if not ok then return fail(why) end
     system.log(session.user .. " added root server " .. entry.name)
     done("Added " .. entry.name .. ".")
 end
@@ -320,7 +331,7 @@ local function rootServers()
     page("Root servers", function()
         local items = {}
         for _, root in ipairs(trust.roots()) do
-            items[#items + 1] = { label = root.name, hint = crypto.fingerprint(crypto.fromHex(root.key)), action = function()
+            items[#items + 1] = { label = root.name, hint = crypto.fingerprint(crypto.fromHex(root.key)), submenu = true, action = function()
                 local ok, err = pcall(manageRoot, root)
                 if not ok and not (type(err) == "table" and err.left) then error(err, 0) end
             end }
@@ -352,13 +363,20 @@ local function printCertificate()
     if ok then done("Printed. It's in the printer's output tray.") else fail(err) end
 end
 
-local function network()
-    page("Network", function()
-        return {
-            { label = "Root servers (" .. #trust.roots() .. ")", hint = "Servers this computer trusts", action = rootServers },
-            { label = "This computer", hint = "Name and fingerprint", action = thisComputer },
-            { label = "Print certificate", hint = "Needs a printer", action = printCertificate },
+-- Security page ---------------------------------------------------------------------------------
+
+local function security()
+    page("Security", function()
+        local items = {
+            { label = "Encryption keys", submenu = true, action = encryptionKeys },
+            { label = "Root servers (" .. #trust.roots() .. ")", hint = "Servers this computer trusts", submenu = true, action = rootServers },
+            { label = "Computer identity", hint = "Name and fingerprint", action = computerIdentity },
+            { label = "Print computer cert", hint = "Needs a printer", action = printCertificate },
         }
+        if session.admin then
+            items[#items + 1] = { label = "Secure boot", action = secureBoot }
+        end
+        return items
     end)
 end
 
@@ -408,19 +426,41 @@ local function computerLabel()
     os.setComputerLabel(label ~= "" and label or nil)
 end
 
+local function sizeText(bytes)
+    if type(bytes) ~= "number" then return tostring(bytes) end -- fs can say "unlimited"
+    return ("%.1f KB"):format(bytes / 1024)
+end
+
+local function uptimeText()
+    local minutes = math.floor(os.clock() / 60)
+    return ("%dh %dm"):format(math.floor(minutes / 60), minutes % 60)
+end
+
+local function about()
+    local lines = {
+        "zOS " .. system.VERSION,
+        "",
+        "Computer: " .. os.getComputerID(),
+        "Label: " .. (os.getComputerLabel() or "(none)"),
+        "Uptime: " .. uptimeText(),
+    }
+    if _HOST then lines[#lines + 1] = "Host: " .. _HOST end
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Free space: " .. sizeText(fs.getFreeSpace("/"))
+    local capacity = fs.getCapacity and fs.getCapacity("/")
+    if capacity then lines[#lines + 1] = "Disk size: " .. sizeText(capacity) end
+    ui.pager("About", table.concat(lines, "\n"))
+end
+
 page(TITLE, function()
     local items = {
-        { label = "Change my password", action = changePassword },
-        { label = "Encryption keys", action = encryptionKeys },
+        { label = "Account", submenu = true, action = account },
+        { label = "Security", submenu = true, action = security },
     }
     if session.admin then
-        items[#items + 1] = { label = "Users", action = users }
-        items[#items + 1] = { label = "Secure boot", action = secureBoot }
-    end
-    items[#items + 1] = { label = "Network", action = network }
-    if session.admin then
-        items[#items + 1] = { label = "Updates", action = updates }
+        items[#items + 1] = { label = "Updates", submenu = true, action = updates }
         items[#items + 1] = { label = "Computer label", action = computerLabel }
     end
+    items[#items + 1] = { label = "About", hint = "Version and free space", action = about }
     return items
 end)

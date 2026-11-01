@@ -4,8 +4,12 @@ local session = ...
 local ui = require("ui")
 
 local TITLE = "Files"
+local OUTSIDE = "You can only use your home folder."
 
 local home = fs.combine("home", session.user)
+-- Administrators can go anywhere. Everyone else stays in their home folder.
+local top = session.admin and "" or home
+if not session.admin then fs.makeDir(home) end
 local cwd = fs.isDir(home) and home or ""
 
 -- The editor's Run menu opens a multishell tab, which would outlive this app and leave a
@@ -28,6 +32,10 @@ end
 local function resolve(input)
     if input:sub(1, 1) == "/" then return fs.combine(input, "") end
     return fs.combine(cwd, input)
+end
+
+local function allowed(path)
+    return top == "" or path == top or path:sub(1, #top + 1) == top .. "/"
 end
 
 local function ask(title, label, default)
@@ -55,6 +63,7 @@ local function transfer(path, verb, fn)
     local dest = resolve(input)
     if fs.isDir(dest) then dest = fs.combine(dest, fs.getName(path)) end
     if dest == path then return end
+    if not allowed(dest) then return report(false, OUTSIDE) end
     if fs.exists(dest) then return report(false, show(dest) .. " already exists.") end
     if verb == "Move" and isSystem(path) then
         ui.screen(TITLE)
@@ -107,6 +116,7 @@ local function newFolder()
     local name = ask("New folder", "Folder name")
     if name == "" then return end
     local path = resolve(name)
+    if not allowed(path) then return report(false, OUTSIDE) end
     if fs.exists(path) then return report(false, show(path) .. " already exists.") end
     local ok, err = pcall(fs.makeDir, path)
     report(ok, err, "Created " .. show(path) .. ".")
@@ -116,6 +126,7 @@ local function newFile()
     local name = ask("New file", "File name")
     if name == "" then return end
     local path = resolve(name)
+    if not allowed(path) then return report(false, OUTSIDE) end
     if fs.exists(path) then return report(false, show(path) .. " already exists.") end
     local file, err = fs.open(path, "w")
     if not file then return report(false, err) end
@@ -126,7 +137,7 @@ end
 local selected = 1
 while true do
     -- The folder can disappear: it was moved or deleted here, or its floppy was taken out.
-    while cwd ~= "" and not fs.isDir(cwd) do cwd = fs.getDir(cwd) end
+    while cwd ~= top and not fs.isDir(cwd) do cwd = fs.getDir(cwd) end
 
     local dirs, files = {}, {}
     for _, name in ipairs(fs.list(cwd)) do
@@ -139,7 +150,7 @@ while true do
         items[#items + 1] = item
         targets[#items] = target
     end
-    if cwd ~= "" then add({ label = "..", hint = "Up one folder" }, "up") end
+    if cwd ~= top then add({ label = "..", hint = "Up one folder" }, "up") end
     for _, path in ipairs(dirs) do
         add({ label = fs.getName(path) .. "/", hint = fs.isReadOnly(path) and "Folder (read-only)" or "Folder" }, { path = path })
     end
@@ -150,11 +161,11 @@ while true do
         add({ label = "[New file]", hint = "Create a file here", fg = ui.theme.accent }, "newfile")
         add({ label = "[New folder]", hint = "Create a folder here", fg = ui.theme.accent }, "newdir")
     end
-    if cwd ~= "" then add({ label = "[This folder...]", hint = "Copy, move or delete this folder", fg = ui.theme.accent }, "self") end
+    if cwd ~= top then add({ label = "[This folder...]", hint = "Copy, move or delete this folder", fg = ui.theme.accent }, "self") end
     add({ label = "Back", fg = ui.theme.dim }, "quit")
 
     local choice = ui.menu({ title = TITLE, status = status, items = items, selected = selected, back = true })
-    local target = choice and targets[choice] or (cwd ~= "" and "up" or "quit")
+    local target = choice and targets[choice] or (cwd ~= top and "up" or "quit")
     if target == "quit" then
         return
     elseif target == "up" then

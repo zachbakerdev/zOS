@@ -828,6 +828,20 @@ function net.tldOf(root)
     return reply.payload.tld
 end
 
+-- Trust a root that has been checked by a person, as long as no other trusted root owns its
+-- top-level domain. Returns true, or false and a reason.
+function net.addRoot(entry)
+    local tld, err = net.tldOf(entry)
+    if not tld then return false, "Couldn't get its top-level domain: " .. tostring(err) end
+    for _, root in ipairs(trust.roots()) do
+        if root.key ~= entry.key and not root.tld then
+            local _, why = net.tldOf(root)
+            if why then return false, "Couldn't check " .. root.name .. ": " .. tostring(why) end
+        end
+    end
+    return trust.addRoot(entry.key, entry.name, entry.host, tld)
+end
+
 function net.rootForTld(tld)
     local found
     local failure

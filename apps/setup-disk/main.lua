@@ -1,4 +1,5 @@
--- zOS Setup Disk: erase a floppy and put the latest release's installer and image on it.
+-- zOS Setup Disk: erase a floppy and put the latest release's installer and image on it, with
+-- any root servers the computers it installs should trust. See specs/formats/ZR_FORMAT.md.
 --
 -- The disk is only erased once both downloads are checked and known to fit, so a failed download
 -- can't cost anyone their floppy.
@@ -6,12 +7,15 @@
 local apps = require("apps")
 local crypto = require("crypto")
 local image = require("image")
+local net = require("net")
+local trust = require("trust")
 local ui = require("ui")
 local update = require("update")
 local util = require("util")
 
 local TITLE = "Setup Disk"
 local MIN_FILE_SIZE = 500 -- CC: Tweaked counts each file as at least this many bytes
+local ROOT_SERVER_CONFIG = "/etc/root-server/config" -- documented in specs/formats/ZR_FORMAT.md
 
 -- Every floppy that can be written to, as { side, mount, id, label }.
 local function findDisks()
@@ -66,6 +70,93 @@ local function chooseDisk()
     end
 end
 
+-- Root servers ------------------------------------------------------------------------------
+
+-- The root servers that can go on a disk, each with its signed zone, and the names of those that
+-- can't. A root's zone signature isn't kept when it's trusted, so each is asked for it.
+local function rootsToOffer()
+    local offers, missing, seen = {}, {}, {}
+
+    local function offer(zone, name, host)
+        if trust.verifyZone(zone, zone.root) and trust.validTld(zone.tld) and trust.validName(name)
+            and not seen[zone.root] then
+            seen[zone.root] = true
+            offers[#offers + 1] = {
+                key = zone.root, tld = zone.tld, sig = zone.sig, name = name, host = host,
+                fingerprint = crypto.fingerprint(crypto.fromHex(zone.root)),
+            }
+            return true
+        end
+    end
+
+    -- This computer's own root server, which it doesn't need to trust to vouch for.
+    local own = util.readTable(ROOT_SERVER_CONFIG)
+    if own and type(own.zone) == "table" and type(own.name) == "string" then
+        offer(own.zone, own.name, os.getComputerID())
+    end
+
+    local trusted = trust.roots()
+    if #trusted > 0 then ui.text("Asking root servers for their zones...") end
+    for _, root in ipairs(trusted) do
+        if not seen[root.key] then
+            local reply = net.request(root.host, net.ROOT_PORT, { op = "zone" })
+            local zone = reply and reply.payload
+            if type(zone) ~= "table" or zone.root ~= root.key or not offer(zone, root.name, root.host) then
+                missing[#missing + 1] = root.name
+            end
+        end
+    end
+    return offers, missing
+end
+
+-- Which offers to embed, as (top-level domain -> offer), or nil to go back. Keying by domain is
+-- what keeps it to one root each: choosing another replaces the one chosen before.
+local function chooseRoots(offers)
+    local chosen, selected = {}, 1
+    while true do
+        local items = {}
+        for i, o in ipairs(offers) do
+            local current = chosen[o.tld]
+            items[i] = {
+                label = (current == o and "[x] " or "[ ] ") .. o.name .. "  ." .. o.tld,
+                hint = o.fingerprint .. (current and current ~= o and "  replaces " .. current.name or ""),
+            }
+        end
+        items[#items + 1] = { label = "Continue", hint = "One root server for each top-level domain" }
+        local choice = ui.menu({ title = TITLE .. " - Trusted roots", items = items, selected = selected, back = true })
+        if not choice then return nil end
+        if choice == #items then return chosen end
+        local o = offers[choice]
+        chosen[o.tld] = chosen[o.tld] ~= o and o or nil
+        selected = choice
+    end
+end
+
+-- The text of a .zr file holding `chosen`, or nil if it's empty.
+local function packRoots(chosen)
+    local roots = {}
+    for tld, o in pairs(chosen) do
+        roots[tld] = { key = o.key, name = o.name, host = o.host, sig = o.sig }
+    end
+    if next(roots) then return textutils.serialize({ ["zr:metadata"] = { version = 1 }, roots = roots }) end
+end
+
+-- What goes on the disk, as text or false for none, or nil to go back.
+local function pickRoots()
+    ui.screen(TITLE)
+    local offers, missing = rootsToOffer()
+    if #missing > 0 then
+        ui.message(TITLE, "These root servers didn't answer, so they can't go on the disk:\n\n" ..
+            table.concat(missing, "\n"), ui.theme.bad)
+    end
+    if #offers == 0 then return false end
+    local chosen = chooseRoots(offers)
+    if not chosen then return nil end
+    return packRoots(chosen) or false
+end
+
+-- The release --------------------------------------------------------------------------------
+
 -- The version, size and SHA-256 of the latest image, or nil and a reason.
 local function latestRelease()
     local text, err = util.get(update.RELEASES .. "latest/download/zos-update.manifest")
@@ -119,6 +210,7 @@ end
 local function fits(d, release)
     local capacity = fs.getCapacity(d.mount)
     local needed = math.max(#release.zi, MIN_FILE_SIZE) + math.max(#release.installer, MIN_FILE_SIZE)
+    if release.roots then needed = needed + math.max(#release.roots, MIN_FILE_SIZE) end
     if type(capacity) == "number" and capacity < needed then
         return nil, ("A setup disk needs %d KB, but this disk only holds %d KB."):format(
             math.ceil(needed / 1000), math.floor(capacity / 1000))
@@ -132,7 +224,10 @@ local function write(d, release)
     for _, name in ipairs(fs.list(d.mount)) do
         fs.delete(fs.combine(d.mount, name))
     end
-    for _, file in ipairs({ { "zos.zi", release.zi }, { "startup.lua", release.installer } }) do
+    local files = { { "zos.zi", release.zi } }
+    if release.roots then files[#files + 1] = { "zos.zr", release.roots } end
+    files[#files + 1] = { "startup.lua", release.installer }
+    for _, file in ipairs(files) do
         local ok, why = util.writeChecked(fs.combine(d.mount, file[1]), file[2])
         if not ok then error("Couldn't write " .. file[1] .. ": " .. tostring(why), 0) end
     end
@@ -147,11 +242,15 @@ local function makeDisk(d)
     ui.text("This deletes everything on the disk.", ui.theme.bad)
     if not ui.confirm("Erase it and make a setup disk?") then return end
 
+    local roots = pickRoots()
+    if roots == nil then return end
+
     ui.screen(TITLE)
     local release, err = download()
     if not release then
         return ui.message(TITLE, "The download failed, so the disk wasn't erased.\n\n" .. err, ui.theme.bad)
     end
+    release.roots = roots or nil
     if not stillThere(d) then
         return ui.message(TITLE, "The disk was taken out or changed, so nothing was erased.", ui.theme.bad)
     end

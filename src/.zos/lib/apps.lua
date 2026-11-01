@@ -72,6 +72,7 @@ local function checkManifest(m)
     if m.minZos ~= nil and not apps.validVersion(m.minZos) then
         return nil, "The manifest's minZos isn't like 1.0.0."
     end
+    if m.admin ~= nil and type(m.admin) ~= "boolean" then return nil, "The manifest's admin isn't true or false." end
     return m
 end
 
@@ -145,6 +146,7 @@ local function record(id)
         author = manifest.author,
         priority = manifest.priority or apps.DEFAULT_PRIORITY,
         minZos = manifest.minZos,
+        admin = manifest.admin == true,
         dir = dir,
         main = main,
         service = fs.exists(service) and service or nil,
@@ -242,7 +244,13 @@ local function pullEvent(filter)
     return table.unpack(event, 1, event.n)
 end
 
+-- Whether this session may open the app. Services don't depend on it, since they have no user.
+function apps.canRun(app, session)
+    return not app.admin or session.admin == true
+end
+
 function apps.launch(app, session)
+    if not apps.canRun(app, session) then return false, "Only administrators can open " .. app.name .. "." end
     local fn, err = util.loadFile(app.main, environment(app))
     if not fn then return false, err end
 

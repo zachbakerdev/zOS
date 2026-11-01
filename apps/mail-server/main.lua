@@ -59,7 +59,7 @@ end
 local function chooseRoot()
     local roots = trust.roots()
     if #roots == 0 then
-        return fail("This computer doesn't trust a root server yet. Add one in Settings > Network > " ..
+        return fail("This computer doesn't trust a root server yet. Add one in Settings > Security > " ..
             "Root servers, then come back.")
     end
     if #roots == 1 then return roots[1] end

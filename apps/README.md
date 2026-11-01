@@ -23,6 +23,7 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
     priority = 10,                       -- lower comes first on the desktop and starts first (default 100)
     author = "you",
     minZos = "1.0.0",                    -- optional: the oldest zOS it runs on
+    admin = true,                        -- optional: only administrators can open it (default false)
 }
 ```
 

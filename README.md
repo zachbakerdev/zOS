@@ -59,7 +59,15 @@ and a computer without zOS will run it when it boots with the disk inserted. Kee
 of the script, because two won't fit on a default floppy with the image.
 
 On a computer already running zOS, the optional **Setup Disk** app does all of this from the latest
-release.
+release. It can also put root servers on the disk, as a separate file, `zos.zr`, next to the image.
+It lists the roots the computer trusts, and its own root server if it has one, and you tick the
+ones to include. There's one for each top-level domain, so ticking another replaces the first. Roots
+are asked for their signed zones, so a root that doesn't answer is left out.
+
+The installer checks `zos.zr` before changing anything, then shows each root's name, domain and
+fingerprint to accept or skip. A root whose domain already belongs to another trusted root is
+skipped, which keeps that root until you remove it. See
+[ZR_FORMAT.md](specs/formats/ZR_FORMAT.md).
 
 The image is fully checked before anything changes. Then, on a computer without zOS, the installer
 copies any `/startup` or `/startup.lua` to `/zos-backup/`, installs the system, **turns off disk
@@ -107,19 +115,20 @@ The folders are in `/etc/zos/update/`. Downloaded and finished updates are logge
 
 - After 3 failed attempts, login locks for 5 seconds, then 10, 20 and so on, up to 5 minutes.
   The lock survives a reboot.
-- Admins add, remove and reset users in **Settings → Users**. Everyone can change their own
-  password there.
+- Admins add, remove and reset users in **Settings → Account → Users**. Everyone can change their
+  own password in **Settings → Account**.
 
 ### Built-in apps
 
 | app             | what it does |
 |-----------------|--------------|
-| **Files**       | Browse folders; create, edit, copy, move and delete files and folders. To run a program, use the Terminal |
-| **Terminal**    | The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
-| **App Manager** | Install and remove apps |
+| **Files**       | Browse folders; create, edit, copy, move and delete files and folders. Users who aren't admins stay in their home folder. To run a program, use the Terminal |
+| **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
+| **App Manager** | Admin only. Install and remove apps |
 
-These can be upgraded but not removed. The desktop also has **Settings**, for your password, the
-computer label and the network. Admins also manage users, root servers, updates and secure boot there.
+These can be upgraded but not removed. The desktop also has **Settings**, for your password and
+keys, and **About** shows the version and free space. Admins also manage users, root servers,
+updates, secure boot and the computer label there.
 
 ### Secure boot
 
@@ -128,7 +137,7 @@ login. zOS turns this off and keeps it off: changing `shell.allow_disk_startup` 
 doesn't stick (see [How it works](#how-it-works)).
 
 If you need to boot from a disk, for example a repair disk, an admin can turn secure boot off
-in **Settings → Secure boot**. This asks for your password. While it's off, *anyone* with a
+in **Settings → Security → Secure boot**. This asks for your password. While it's off, *anyone* with a
 floppy can boot their own program and skip the login, so turn it back on afterwards.
 
 The setting is saved in `/etc/zos/config`, and each change is logged to `/etc/zos/system.log`.
@@ -147,7 +156,7 @@ folder under `apps/`.
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
-| [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy and writes the latest release's installer and image to it |
+| [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy and writes the latest release's installer and image to it, with any root servers you choose |
 
 ### Making app disks
 
@@ -182,10 +191,11 @@ An app is a folder with a manifest and a main program, installed to `/.zos/apps/
   author = "you",
   priority = 10,           -- optional: lower comes first (default 100)
   minZos = "1.0.0",        -- optional: the oldest zOS it runs on
+  admin = true,            -- optional: only administrators can open it (default false)
 }
 ```
 
-The desktop lists every installed app. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only
+The desktop lists every installed app the user can open. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only
 the app, never the session. `session` holds `user`, `admin`, `since`, `secretKey` and `publicKey`.
 `require` finds the app's own modules first, then the system libraries, such as `ui`, `apps`, `auth`,
 `crypto`, `keys`, `net` and `system`. See [apps/README.md](apps/README.md) and
@@ -262,8 +272,8 @@ fails with a timeout, and `net.send` can take around 20 seconds to give up.
   first time it's seen, and it's refused if the key changes, unless the new key has a certificate
   for that computer id. The traffic is encrypted, but
   on first contact nothing shows who is on the other end, and computer ids can be faked. Use
-  `verified` or `expect` for anything that matters. Pinned keys are in **Settings → Encryption
-  keys → Trusted keys**, and forgetting one there lets that computer change key.
+  `verified` or `expect` for anything that matters. Pinned keys are in **Settings → Security →
+  Encryption keys → Trusted keys**, and forgetting one there lets that computer change key.
 
 ### Root servers
 
@@ -272,13 +282,15 @@ saying "this key belongs to this name on this computer".
 
 1. **Set one up.** Install the Root Server app on a computer that only admins can log in to, open
    it, and name the server. It announces itself on port 4200.
-2. **Trust it.** On each other computer, an admin opens **Settings → Network → Root servers → Add
+2. **Trust it.** On each other computer, an admin opens **Settings → Security → Root servers → Add
    root server...**. zOS asks every root server in range to identify itself and lists their names
    and fingerprints. Anyone can announce a root server under any name, so compare the
-   fingerprint with the one in **This server** in the Root Server app before accepting.
+   fingerprint with the one in **This server** in the Root Server app before accepting. A computer
+   trusts one root for each top-level domain, so a root whose domain is taken is refused, and
+   every root it trusts has to be reachable or have its domain known already.
 3. **Get a certificate.** Choose the server in that list, then **Request a certificate** and pick
    a name. The screen waits while the root server's admin compares fingerprints (**Settings →
-   Network → This computer** shows yours) and approves it under **Requests**. If you stop waiting,
+   Security → Computer identity** shows yours) and approves it under **Requests**. If you stop waiting,
    the request stays, and asking again picks up the answer.
 
 Certificates last 30 days unless the root server is set otherwise, and computers renew them by
@@ -293,7 +305,7 @@ lifetime short if that matters to you.
 
 With a printer attached, both sides can put this on paper. **Print server identity** in the Root
 Server app prints the server's name, top-level domain, computer, port, fingerprint and public key,
-for people to check against when they add it. **Settings → Network → Print certificate** prints
+for people to check against when they add it. **Settings → Security → Print computer cert** prints
 this computer's certificate, in full. Each needs paper and ink for up to two pages.
 
 ### Hostnames
@@ -329,7 +341,7 @@ The Mail Server app (port 4202) holds mailboxes for accounts, and the Mail app r
 through it from any other computer. An address is `account@hostname`, like
 `alice@zmail.root-a`.
 
-1. **Trust a root server** on the mail server, in **Settings → Network → Root servers**. See
+1. **Trust a root server** on the mail server, in **Settings → Security → Root servers**. See
    [Root servers](#root-servers).
 2. **Get a hostname.** Open Mail Server, which asks for a name and adds the root's top-level domain.
    The root server's admin compares fingerprints and approves it under **Requests**.
@@ -490,14 +502,16 @@ differ, they are the target.
 | [APP_STANDARDS.md](specs/APP_STANDARDS.md) | Where apps keep their files |
 | [ZA_FORMAT.md](specs/formats/ZA_FORMAT.md) | The .za app image format |
 | [ZI_FORMAT.md](specs/formats/ZI_FORMAT.md) | The .zi system image format |
+| [ZR_FORMAT.md](specs/formats/ZR_FORMAT.md) | The .zr file of root servers on a setup disk |
 | [APPMAN.md](specs/APPMAN.md) | The `appman` command |
 | [specs/libs/](specs/libs) | One specification per system library, listed in [ZOS.md](specs/ZOS.md) |
 
 ## Limitations
 
-- **Users can see each other's files.** ComputerCraft has no file permissions, so logins keep
-  strangers out but don't separate the people who can log in. Any user can open the Terminal and
-  read or change any file. Only give accounts to people you trust. Data encrypted with a user's
+- **Users aren't fully separated.** ComputerCraft has no file permissions. Users who aren't admins
+  can't open the Terminal, and Files keeps them in their home folder, but that's enforced by the
+  apps, not by the computer. Any app they can open can reach every file, and File Share lets them
+  share another user's files. Only give accounts to people you trust. Data encrypted with a user's
   key is the exception: only that user's password can unlock it.
 - **Network keys aren't protected by a password.** Networking runs while nobody is logged in, so
   a computer's identity key, and a root server's signing key, are stored unencrypted in

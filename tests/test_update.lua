@@ -494,6 +494,24 @@ do
   check("install allows a met minZos", apps.install(parsed("2.0.0")))
   check("minZos is kept on the app", apps.get("x").minZos == "2.0.0")
 
+  check("apps aren't admin only by default", apps.get("x").admin == false)
+  local user, boss = { user = "u", admin = false }, { user = "b", admin = true }
+  check("anyone can run a normal app", apps.canRun(apps.get("x"), user))
+  local function setManifest(text)
+    local file = c.env.fs.open(".zos/apps/x/app.manifest", "w")
+    file.write(text)
+    file.close()
+  end
+  setManifest('{ name = "X", version = "1.0.0", admin = true }')
+  check("reads the admin flag", apps.get("x").admin == true)
+  check("an admin can run an admin app", apps.canRun(apps.get("x"), boss))
+  check("a user can't run an admin app", not apps.canRun(apps.get("x"), user))
+  local started, why = apps.launch(apps.get("x"), user)
+  check("launch refuses a user", started == false and why:find("Only administrators", 1, true))
+  setManifest('{ name = "X", version = "1.0.0", admin = "yes" }')
+  check("refuses an admin flag that isn't a boolean", apps.get("x") == nil)
+  setManifest('{ name = "X", version = "1.0.0" }')
+
   publishApps(c, { old = { "2.0.0", "3.0.0" }, same = { "3.0.0", "3.0.0" }, fresh = { "1.0.0", "3.0.0" }, ok = { "1.0.0", "2.0.0" } })
   local list = call(c, c.update.checkApps)
   check("apps it can run come first", list[1].id == "ok" and list[1].supported)

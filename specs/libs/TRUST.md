@@ -21,13 +21,15 @@ A revoked certificate keeps working until it expires, because computers don't ch
 
 ### Root servers
 
-A root server is a computer whose key others have chosen to trust. To use one, an admin adds it in **Settings → Network → Root servers**, comparing its fingerprint with the one the server shows. The computer then requests a certificate, and the root server's admin approves it.
+A root server is a computer whose key others have chosen to trust. To use one, an admin adds it in **Settings → Security → Root servers**, comparing its fingerprint with the one the server shows. The computer then requests a certificate, and the root server's admin approves it.
 
 ### Hostnames
 
 A hostname is a certificate name of the form `<label>.<tld>`, such as `zmail.root-a`, up to 24 characters of lowercase letters, digits and `-`, with one dot. Each root owns one top-level domain, set in a signed zone record, and only signs hostnames in that domain.
 
-A lookup finds the trusted root that owns the domain and asks it for the certificate. Both answers are signed by the root, so the computer it runs on can make a lookup fail but can't change the answer. If two trusted roots claim one domain, lookups in it are refused.
+A lookup finds the trusted root that owns the domain and asks it for the certificate. Both answers are signed by the root, so the computer it runs on can make a lookup fail but can't change the answer.
+
+A computer trusts one root for each domain. `net.addRoot` and the installer refuse a second, and a setup disk can only hold one. If two trusted roots still claim one domain, as they can on a computer that trusted them before this rule or when a root moves to another domain, lookups in it are refused.
 
 ## Permissions
 
@@ -86,11 +88,12 @@ A name is up to 32 letters, digits, spaces, `-` or `_`. A name with a dot MUST b
 | -------------------------------- | ------------------------------------------------------------- |
 | `trust.roots()`                  | Every trusted root, sorted by name                            |
 | `trust.root(key)`                | The trusted root with this key, or nil                        |
-| `trust.addRoot(key, name, host)` | Nothing. Trusts a root, and keeps its top-level domain if it's already known |
+| `trust.addRoot(key, name, host, tld)` | True, or false and a reason. Trusts a root, and keeps its top-level domain if it's already known. `tld`, if given, MUST be verified, and is refused if another root owns it |
+| `trust.tldOwner(tld, except)`    | The trusted root known to own this domain, other than the one with key `except`, or nil |
 | `trust.removeRoot(key)`          | Nothing. Stops trusting it, and deletes its certificate for this computer |
 | `trust.setRootTld(key, tld)`     | Nothing. Remembers a top-level domain from a zone that has been verified |
 
-A person MUST compare a root's fingerprint before it's added, and a caller acting for a user MUST check `session.admin`.
+A person MUST compare a root's fingerprint before it's added, and a caller acting for a user MUST check `session.admin`. Callers SHOULD use `net.addRoot`, which finds the domain and enforces one root for each. See [NET.md](NET.md).
 
 ## This computer's certificates
 

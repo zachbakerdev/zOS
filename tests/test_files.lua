@@ -37,7 +37,7 @@ local function pick(c, n)
   key(c, "enter")
 end
 
-local function start(files, width)
+local function start(files, width, session)
   for _, c in pairs(sim.computers) do sim.powerOff(c) end
   local c = sim.computer(1, { files = files, width = width })
   c.edited, c.editorEnv = {}, nil
@@ -49,7 +49,7 @@ local function start(files, width)
   end
   local fn = assert(loadfile("apps/files/main.lua"))
   setfenv(fn, c.env)
-  c.thread = sim.spawn(c, fn, { user = "me", admin = false }, {})
+  c.thread = sim.spawn(c, fn, session or { user = "me", admin = true }, {})
   return c
 end
 
@@ -211,6 +211,82 @@ do
 end
 
 -- A pocket computer's screen ---------------------------------------------------
+
+do
+  local user = { user = "me", admin = false }
+  local c = start({ ["home/me/box/x"] = "x", ["home/me/a.txt"] = "A", ["home/you/b.txt"] = "B",
+    ["home/meow/c.txt"] = "C" }, nil, user)
+  local function refused(input)
+    line(c, input)
+    screenHas(c, "You can only use your home folder.")
+    key(c, "enter")
+    screenHas(c, "[New file]")
+  end
+
+  -- At home: box/, a.txt, [New file], [New folder], Back
+  check("user opens at home", screenHas(c, "/home/me"))
+  check("no way up from home", not has(c.screenText(), ".."))
+  check("home itself can't be moved", not has(c.screenText(), "[This folder...]"))
+
+  pick(c, 2)
+  screenHas(c, "File name")
+  refused("/etc/x.txt")
+  check("no file outside home", c.files["etc/x.txt"] == nil)
+  pick(c, 2)
+  screenHas(c, "File name")
+  refused("../you/x.txt")
+  check("no climbing out", c.files["home/you/x.txt"] == nil)
+  pick(c, 2)
+  screenHas(c, "File name")
+  refused("/home/meow/x.txt")
+  check("a similar name isn't home", c.files["home/meow/x.txt"] == nil)
+  pick(c, 3)
+  screenHas(c, "Folder name")
+  refused("/stuff")
+  check("no folder outside home", not c.env.fs.exists("stuff"))
+
+  pick(c, 1) -- a.txt
+  screenHas(c, "Copy to...")
+  pick(c, 1)
+  screenHas(c, "Copy a.txt to")
+  refused("/home/you/a.txt")
+  check("no copy outside home", c.files["home/you/a.txt"] == nil)
+  pick(c, 0) -- the list stays on a.txt
+  screenHas(c, "Rename / move...")
+  pick(c, 2)
+  screenHas(c, "Move a.txt to")
+  refused("/a.txt")
+  check("no move outside home", c.files["a.txt"] == nil and c.files["home/me/a.txt"] == "A")
+
+  -- Inside a folder of their own, they can go back up, but stop at home.
+  key(c, "home")
+  key(c, "enter")
+  check("user enters a folder", screenHas(c, "/home/me/box"))
+  check("subfolder has a way up", has(c.screenText(), ".."))
+  key(c, "backspace")
+  screenHas(c, "[New folder]")
+  sim.run(function() return not has(c.screenText(), "/home/me/box") end, 30)
+  check("stops at home", has(c.screenText(), "/home/me") and not has(c.screenText(), ".."))
+
+  -- Losing a folder falls back to home at the deepest.
+  key(c, "home")
+  key(c, "enter")
+  screenHas(c, "/home/me/box")
+  c.env.fs.delete("home/me/box")
+  key(c, "down")
+  key(c, "up")
+  key(c, "enter") -- ..
+  screenHas(c, "[New folder]")
+  key(c, "backspace")
+  sim.run(function() return c.thread.done end, 30)
+  check("backspace at home leaves", c.thread.done)
+end
+
+do
+  local c = start({ ["etc/x"] = "x" }, nil, { user = "me", admin = false })
+  check("a missing home folder is made", screenHas(c, "/home/me") and c.env.fs.isDir("home/me"))
+  check("and stays there", not has(c.screenText(), "etc/"))
+end
 
 do
   local c = start({ ["home/me/a-file-with-a-rather-long-name.txt"] = "x" }, 26)

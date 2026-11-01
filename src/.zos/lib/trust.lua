@@ -170,10 +170,21 @@ function trust.root(key)
     return allRoots()[key]
 end
 
-function trust.addRoot(key, name, host)
+-- The trusted root known to own a top-level domain, other than the one with key `except`.
+function trust.tldOwner(tld, except)
+    for key, root in pairs(allRoots()) do
+        if root.tld == tld and key ~= except then return root end
+    end
+end
+
+-- Trust a root. Given a verified top-level domain, refuses a second root for it.
+function trust.addRoot(key, name, host, tld)
+    local owner = tld and trust.tldOwner(tld, key)
+    if owner then return false, owner.name .. " already owns ." .. tld .. "." end
     local all = allRoots()
-    all[key] = { key = key, name = name, host = host, tld = all[key] and all[key].tld }
+    all[key] = { key = key, name = name, host = host, tld = tld or (all[key] and all[key].tld) }
     util.writeTable(ROOTS, all)
+    return true
 end
 
 function trust.removeRoot(key)

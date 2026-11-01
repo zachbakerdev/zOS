@@ -69,7 +69,7 @@ local function reviewPending(entry)
     ui.text(crypto.fingerprint(crypto.fromHex(entry.key)), ui.theme.accent)
     ui.text("")
     ui.text("Approve this only if computer " .. tostring(entry.from) .. " itself shows the same " ..
-        "fingerprint in Settings > Network, and you're sure it deserves this name.", ui.theme.dim)
+        "fingerprint in Settings > Security, and you're sure it deserves this name.", ui.theme.dim)
     ui.text("")
     if ui.confirm("Sign this key?") then
         ui.text("Signing...", ui.theme.dim)
@@ -139,7 +139,7 @@ local function identityText()
         db.config().zone.tld .. "\nComputer: " .. os.getComputerID() ..
         "\nPort: " .. net.ROOT_PORT .. "\n\nFingerprint:\n" .. db.fingerprint() ..
         "\n\nPublic key:\n" .. crypto.toHex(public) ..
-        "\n\nPeople adding this server in Settings > Network should see this fingerprint."
+        "\n\nPeople adding this server in Settings > Security should see this fingerprint."
 end
 
 local function serverInfo()

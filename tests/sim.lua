@@ -38,11 +38,17 @@ local function newFs(files)
   local fs = {}
   local dirs = {} -- empty folders; others exist because of the files in them
   local function norm(p) return (p:gsub("^/+", "")) end
+  -- Like CC, this resolves "." and "..", keeping any ".." that climbs past the root.
   function fs.combine(a, b)
-    a, b = norm(a), norm(b or "")
-    if a == "" then return b end
-    if b == "" then return a end
-    return a .. "/" .. b
+    local parts = {}
+    for part in ((a .. "/" .. (b or "")):gsub("\\", "/")):gmatch("[^/]+") do
+      if part == ".." and #parts > 0 and parts[#parts] ~= ".." then
+        parts[#parts] = nil
+      elseif part ~= "." then
+        parts[#parts + 1] = part
+      end
+    end
+    return table.concat(parts, "/")
   end
   function fs.getDir(p) return norm(p):match("^(.*)/[^/]*$") or "" end
   function fs.exists(p)

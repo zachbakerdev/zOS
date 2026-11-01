@@ -55,7 +55,7 @@ local function start(files, drives, change)
   }
   c.site[MANIFEST] = "zos-update 1\nversion=" .. VERSION .. "\nsize=" .. #image .. "\nsha256=" ..
     env.require("crypto").sha256(image) .. "\nend\n"
-  if change then change(c.site, drives) end
+  if change then change(c.site, drives, c) end
   c.image, c.requests = c.site[IMAGE], {}
   env.http = { get = function(url)
     c.requests[#c.requests + 1] = url
@@ -65,15 +65,16 @@ local function start(files, drives, change)
     return { readAll = function() return text end, close = function() end }
   end }
 
+  local realPeripheral = env.peripheral
   env.peripheral = setmetatable({
     getNames = function()
-      local names = {}
+      local names = realPeripheral.getNames()
       for side in pairs(drives) do names[#names + 1] = side end
       table.sort(names)
       return names
     end,
-    getType = function(side) return drives[side] and "drive" or nil end,
-  }, { __index = env.peripheral })
+    getType = function(side) return drives[side] and "drive" or realPeripheral.getType(side) end,
+  }, { __index = realPeripheral })
   env.disk = {
     hasData = function(side) return drives[side] ~= nil and not drives[side].empty end,
     getMountPath = function(side) return drives[side].mount end,
@@ -205,6 +206,116 @@ do
   screenHas(c, "Put a floppy")
   key(c, "backspace")
   check("none: backspace leaves", finished(c))
+end
+
+-- Root servers -------------------------------------------------------------------------------------
+
+local function rootServer(id, name, tld)
+  local c = sim.computer(id)
+  c.appDir = "apps/root-server/"
+  c.db = c.env.require("rootdb")
+  sim.call(c, function() c.db.setup(name, tld) end)
+  local fn = assert(loadfile("apps/root-server/service.lua"))
+  setfenv(fn, c.env)
+  sim.spawn(c, fn)
+  sim.advance(1)
+  return c
+end
+
+local function trustIt(c, server, name)
+  local _, public = server.db.keypair()
+  c.env.require("trust").addRoot(c.env.require("crypto").toHex(public), name, server.id)
+end
+
+local function onDisk(c, files)
+  return files["disk/zos.zr"] and c.env.textutils.unserialize(files["disk/zos.zr"])
+end
+
+-- One root for each domain: the second choice replaces the first.
+do
+  local files = oldDisk()
+  local c = start(files, oneDrive(), function(_, _, c)
+    trustIt(c, rootServer(10, "Alpha", "shared"), "Alpha")
+    trustIt(c, rootServer(11, "Beta", "shared"), "Beta")
+    trustIt(c, rootServer(12, "Gamma", "other"), "Gamma")
+  end)
+  screenHas(c, "Erase it and make a setup disk?")
+  char(c, "y")
+  check("roots: lists them", screenHas(c, "[ ] Alpha  .shared"))
+  key(c, "enter")
+  check("roots: ticks one", screenHas(c, "[x] Alpha  .shared"))
+  key(c, "down")
+  check("roots: warns about the replacement", screenHas(c, "replaces Alpha"))
+  key(c, "enter")
+  check("roots: the other is replaced", screenHas(c, "[x] Beta  .shared") and screenHas(c, "[ ] Alpha  .shared"))
+  key(c, "down")
+  key(c, "enter")
+  check("roots: another domain is added", screenHas(c, "[x] Gamma  .other"))
+  key(c, "down")
+  key(c, "enter")
+  screenHas(c, "This is now")
+  local data = onDisk(c, files)
+  check("roots: the format version", data["zr:metadata"].version == 1)
+  check("roots: the chosen root", data.roots.shared.name == "Beta" and data.roots.shared.host == 11)
+  check("roots: the other domain", data.roots.other.name == "Gamma")
+  local trust = c.env.require("trust")
+  local shared = data.roots.shared
+  check("roots: signed", sim.call(c, function()
+    return trust.verifyZone({ tld = "shared", root = shared.key, sig = shared.sig }, shared.key)
+  end))
+  check("roots: the image is untouched", files["disk/zos.zi"] == c.image)
+  check("roots: three files", #c.env.fs.list("disk") == 3)
+end
+
+-- Choosing none leaves no file, and a dead root is left out.
+do
+  local files = oldDisk()
+  local c = start(files, oneDrive(), function(_, _, c)
+    c.env.require("trust").addRoot(string.rep("a", 64), "Gone", 99)
+    trustIt(c, rootServer(10, "Alpha", "alpha"), "Alpha")
+  end)
+  screenHas(c, "Erase it and make a setup disk?")
+  char(c, "y")
+  check("dead root: says so", screenHas(c, "Gone"))
+  key(c, "enter")
+  screenHas(c, "[ ] Alpha")
+  check("dead root: isn't offered", not c.screenText():find("Gone", 1, true))
+  key(c, "up")
+  key(c, "enter")
+  screenHas(c, "This is now")
+  check("none chosen: no file", files["disk/zos.zr"] == nil and files["disk/zos.zi"] ~= nil)
+end
+
+-- Backing out of the list changes nothing.
+do
+  local files = oldDisk()
+  local c = start(files, oneDrive(), function(_, _, c) trustIt(c, rootServer(10, "Alpha", "alpha"), "Alpha") end)
+  screenHas(c, "Erase it and make a setup disk?")
+  char(c, "y")
+  screenHas(c, "[ ] Alpha")
+  key(c, "backspace")
+  check("back: leaves", finished(c))
+  check("back: disk unchanged", files["disk/old.txt"] == "old" and #c.requests == 0)
+end
+
+-- A root server can put itself on a disk without trusting itself.
+do
+  local files = oldDisk()
+  local c = start(files, oneDrive(), function(_, _, c)
+    c.appDir = "apps/root-server/"
+    local db = c.env.require("rootdb")
+    sim.call(c, function() db.setup("Own Root", "own") end)
+    c.appDir = nil
+  end)
+  screenHas(c, "Erase it and make a setup disk?")
+  char(c, "y")
+  check("own root: offered", screenHas(c, "[ ] Own Root  .own"))
+  key(c, "enter")
+  screenHas(c, "[x] Own Root")
+  key(c, "up")
+  key(c, "enter")
+  screenHas(c, "This is now")
+  check("own root: on the disk", onDisk(c, files).roots.own.host == 1)
 end
 
 if failed > 0 then

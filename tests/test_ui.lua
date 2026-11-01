@@ -29,6 +29,14 @@ local function screenHas(c, text)
   return true
 end
 
+-- Whether the row holding `text` ends with `tail`, ignoring the spaces after it.
+local function rowEnds(c, text, tail)
+  for row in (c.screenText() .. "\n"):gmatch("(.-)\n") do
+    if has(row, text) then return row:gsub("%s+$", ""):sub(-#tail) == tail end
+  end
+  return false
+end
+
 local function key(c, name) c.env.os.queueEvent("key", c.env.keys[name]) end
 local function char(c, ch) c.env.os.queueEvent("char", ch) end
 local function line(c, text) c.env.os.queueEvent("sim_line", text) end
@@ -71,12 +79,30 @@ local function scenario(width)
   c.env.require("auth").create("admin", "password1", true)
   c.env.require("auth").create("guest", "password1", false)
   local settings = runScreen(c, SETTINGS, admin)
-  check("settings has a network page", screenHas(c, "Network"))
+  check("settings has a security page", screenHas(c, "Security"))
+  check("main page has no network item", not has(c.screenText(), "Network"))
+  check("main page keeps updates", has(c.screenText(), "Updates"))
+  check("main page keeps the label", has(c.screenText(), "Computer label"))
+  check("main page has no password item", not has(c.screenText(), "Change my password"))
+  local function marked(label) return has(c.screenText(), label) and rowEnds(c, label, ">") end
+  check("a submenu is marked", marked("Account") and marked("Security") and marked("Updates"))
+  check("an action isn't marked", has(c.screenText(), "Computer label") and not rowEnds(c, "Computer label", ">"))
 
-  -- Settings: Change my password, Encryption keys, Users, Secure boot, Network, ...
-  pick(c, 4)
-  check("network page", screenHas(c, "Root servers (0)"))
+  -- Settings: Account, Security, Updates, Computer label
   pick(c, 0)
+  check("account page", screenHas(c, "Change my password"))
+  check("account page has users", has(c.screenText(), "Users"))
+  check("the password is an action", not rowEnds(c, "Change my password", ">"))
+  key(c, "backspace")
+  screenHas(c, "Computer label")
+  pick(c, 1)
+  check("security page", screenHas(c, "Encryption keys"))
+  check("security page has secure boot", has(c.screenText(), "Secure boot"))
+  check("security page has root servers", has(c.screenText(), "Root servers (0)"))
+  check("security page has the identity", has(c.screenText(), "Computer identity"))
+  check("security page prints", has(c.screenText(), "Print computer cert"))
+  -- Security: Encryption keys, Root servers, Computer identity, Print computer cert, Secure boot
+  pick(c, 1)
   check("root server list", screenHas(c, "Add root server..."))
   pick(c, 0)
   check("scan names the server", screenHas(c, "Overworld Root"))
@@ -129,27 +155,27 @@ local function scenario(width)
   key(c, "backspace")
   check("back to the root list", screenHas(c, "Add root server..."))
   key(c, "backspace")
-  check("back to the network page", screenHas(c, "Print certificate"))
+  check("back to the security page", screenHas(c, "Print computer cert"))
   pick(c, 2)
   check("no printer says so", screenHas(c, "Attach one"))
   key(c, "enter")
-  check("back after no printer", screenHas(c, "Print certificate"))
+  check("back after no printer", screenHas(c, "Print computer cert"))
   c.printers.left = sim.printer(1, 5)
   key(c, "enter")
   check("too little paper says so", screenHas(c, "needs paper"))
   check("nothing printed without enough paper", #c.printers.left.pages == 0)
   key(c, "enter")
-  check("back after too little paper", screenHas(c, "Print certificate"))
+  check("back after too little paper", screenHas(c, "Print computer cert"))
   c.printers.left = sim.printer(5, 1)
   key(c, "enter")
   check("too little ink says so", screenHas(c, "needs ink"))
   key(c, "enter")
-  screenHas(c, "Print certificate")
+  screenHas(c, "Print computer cert")
   c.printers.left = sim.printer(5, 5, 1)
   key(c, "enter")
   check("a full tray says how far it got", screenHas(c, "after 1 of 2 pages"))
   key(c, "enter")
-  screenHas(c, "Print certificate")
+  screenHas(c, "Print computer cert")
   c.printers.left = sim.printer(5, 5)
   key(c, "enter")
   check("certificate printed", screenHas(c, "Printed."))
@@ -169,7 +195,7 @@ local function scenario(width)
   check("printed the signature", has(whole, cert.sig))
   check("no section is split between pages", not paper.pages[1].lines[#paper.pages[1].lines]:match(":$"))
   key(c, "enter")
-  screenHas(c, "Print certificate")
+  screenHas(c, "Print computer cert")
 
   -- with certificates from two roots, you choose which
   local otherSeed, otherKey = c.env.require("crypto").signingKeypair()
@@ -184,11 +210,11 @@ local function scenario(width)
   check("prints the one chosen", screenHas(c, "Printed."))
   check("chosen certificate", has(c.printers.left.text(), "[Certificate: " .. firstChoice .. " 1/2]"))
   key(c, "enter")
-  screenHas(c, "Print certificate")
+  screenHas(c, "Print computer cert")
   key(c, "enter")
   check("backs out of the choice", screenHas(c, "alpha-too"))
   key(c, "backspace")
-  check("nothing more printed", screenHas(c, "Print certificate") and #c.printers.left.pages == 2)
+  check("nothing more printed", screenHas(c, "Print computer cert") and #c.printers.left.pages == 2)
 
   -- printing the root server's identity
   key(root, "backspace")
@@ -221,10 +247,18 @@ local function scenario(width)
   guest.env.require("auth").create("root", "password1", true)
   guest.env.require("auth").create("guest", "password1", false)
   runScreen(guest, SETTINGS, guestSession)
-  check("guest settings", screenHas(guest, "Network"))
-  pick(guest, 2) -- no Users or Secure boot rows
-  check("guest network page", screenHas(guest, "Root servers (0)"))
+  check("guest settings", screenHas(guest, "Security"))
+  check("guest has no admin rows", not has(guest.screenText(), "Updates"))
   pick(guest, 0)
+  check("guest account page", screenHas(guest, "Change my password"))
+  check("guest can't see users", not has(guest.screenText(), "Users"))
+  key(guest, "backspace")
+  screenHas(guest, "Security")
+  pick(guest, 1)
+  check("guest security page", screenHas(guest, "Encryption keys"))
+  check("guest can't see secure boot", not has(guest.screenText(), "Secure boot"))
+  check("guest sees root servers", has(guest.screenText(), "Root servers (0)"))
+  pick(guest, 1)
   check("guest list", screenHas(guest, "Add root server..."))
   pick(guest, 0)
   check("guest can't add", screenHas(guest, "Only administrators"))
@@ -233,13 +267,63 @@ local function scenario(width)
   local lonely = sim.computer(3, { width = width, modems = {} })
   lonely.env.require("auth").create("admin", "password1", true)
   runScreen(lonely, SETTINGS, admin)
-  screenHas(lonely, "Network")
-  pick(lonely, 4)
+  screenHas(lonely, "Security")
+  pick(lonely, 1)
   screenHas(lonely, "Root servers (0)")
-  pick(lonely, 0)
+  pick(lonely, 1)
   screenHas(lonely, "Add root server...")
   pick(lonely, 0)
   check("no modem says so", screenHas(lonely, "Attach one"))
+
+  -- About, for admins and everyone else
+  local curious = sim.computer(4, { width = width, label = "beta" })
+  curious.env.require("auth").create("admin", "password1", true)
+  runScreen(curious, SETTINGS, admin)
+  screenHas(curious, "Computer label")
+  check("about isn't a submenu", not rowEnds(curious, "About", ">"))
+  pick(curious, 4)
+  check("about shows the version", screenHas(curious, "zOS " .. curious.env.require("system").VERSION))
+  check("about shows the computer", has(curious.screenText(), "Computer: 4"))
+  check("about shows the label", has(curious.screenText(), "Label: beta"))
+  check("about shows free space", has(curious.screenText(), "Free space: 976.6 KB"))
+  char(curious, "q")
+  check("back from about", screenHas(curious, "Computer label"))
+
+  local visitor = sim.computer(5, { width = width })
+  visitor.env.require("auth").create("root", "password1", true)
+  runScreen(visitor, SETTINGS, guestSession)
+  screenHas(visitor, "About")
+  pick(visitor, 2) -- Account, Security, About
+  check("guest about", screenHas(visitor, "Free space:"))
+  check("no label says so", has(visitor.screenText(), "Label: (none)"))
+end
+
+-- Apps that set `admin` are left off the desktop of anyone else.
+do
+  for _, c in pairs(sim.computers) do sim.powerOff(c) end
+  local function desktop(id, session)
+    local c = sim.computer(id)
+    c.files[".zos/apps/open/main.lua"] = "-- open"
+    c.files[".zos/apps/open/app.manifest"] = '{ name = "Open App", version = "1.0.0" }'
+    c.files[".zos/apps/locked/main.lua"] = "-- locked"
+    c.files[".zos/apps/locked/app.manifest"] = '{ name = "Locked App", version = "1.0.0", admin = true }'
+    runScreen(c, "src/.zos/sys/desktop.lua", session)
+    screenHas(c, "Settings")
+    return c.screenText()
+  end
+  local adminDesktop = desktop(20, { user = "admin", admin = true })
+  check("admins see admin apps", has(adminDesktop, "Open App") and has(adminDesktop, "Locked App"))
+  local userDesktop = desktop(21, { user = "guest", admin = false })
+  check("users see normal apps", has(userDesktop, "Open App"))
+  check("users don't see admin apps", not has(userDesktop, "Locked App"))
+
+  local adminOnly = { appman = true, terminal = true, ["setup-disk"] = true, ["mail-server"] = true, ["root-server"] = true }
+  for _, id in ipairs({ "appman", "terminal", "setup-disk", "mail-server", "root-server", "files", "fileshare", "mail" }) do
+    local file = assert(io.open("apps/" .. id .. "/app.manifest"))
+    local text = file:read("*a")
+    file:close()
+    check(id .. " has the right admin flag", has(text, "admin = true") == (adminOnly[id] == true))
+  end
 end
 
 scenario(51)

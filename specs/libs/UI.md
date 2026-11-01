@@ -54,11 +54,13 @@ Every screen has a title bar on line 1, and its content starts at column 2 of li
 | ---------- | ------------------------------------------------------------------- |
 | `title`    | The title bar's text                                                |
 | `status`   | As for `ui.screen`                                                  |
-| `items`    | A list of `{ label, hint, fg }`. `hint` is shown at the bottom of the screen while the item is selected, and `fg` colours its label |
+| `items`    | A list of `{ label, hint, fg, submenu }`. `hint` is shown at the bottom of the screen while the item is selected, `fg` colours its label, and `submenu` puts a `>` at the end of its row |
 | `selected` | The item selected at first. Defaults to 1                           |
 | `back`     | Whether Backspace goes back, which returns nil                      |
 
 The arrow keys wrap around. Page Up, Page Down, Home, End, the scroll wheel and clicks also work, and a click chooses the item straight away. Without `back`, the only way out is to choose an item, so the caller MUST offer one that leaves if it's needed. `items` MUST NOT be empty.
+
+An item that opens another menu SHOULD set `submenu`, so it can be told apart from one that does something straight away. The `>` doesn't rely on colour, so it also works on computers without it.
 
 ```lua
 local choice = ui.menu({

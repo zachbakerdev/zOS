@@ -235,6 +235,8 @@ def check_manifest(m):
         raise ManifestError("priority must be a number")
     if "minZos" in m and (not isinstance(m["minZos"], str) or not VERSION.fullmatch(m["minZos"])):
         raise ManifestError("minZos must be a major.minor.patch version, like minZos = \"2.1.0\" (in quotes)")
+    if "admin" in m and not isinstance(m["admin"], bool):
+        raise ManifestError("admin must be true or false")
 
 
 def version_key(version):

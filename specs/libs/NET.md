@@ -130,6 +130,7 @@ Probes are how computers find each other before they know anything about each ot
 | Method                                | Returns                                                                 |
 | ------------------------------------- | ----------------------------------------------------------------------- |
 | `net.findRoots(timeout)`              | Root servers in range, as `{ name, key, host, fingerprint }`            |
+| `net.addRoot(entry)`                  | True, or false and a reason. Trusts a root from `findRoots`, unless another trusted root owns its top-level domain or one that doesn't have a known domain can't be asked |
 | `net.requestCertificate(root, name)`  | `"issued"`, `"pending"` or `"denied"`. Safe to repeat                   |
 
 Being listed by `findRoots` proves only that a server holds the key it shows, so a person MUST compare the fingerprint before it's trusted. Ordinary apps don't need these methods, because Settings handles them.

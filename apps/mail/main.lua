@@ -132,7 +132,7 @@ end
 local function askCredentials(heading)
     ui.screen(TITLE .. " - " .. heading)
     ui.text("This computer has to trust the root server that gave your mail server its hostname. " ..
-        "Add it in Settings > Network > Root servers.", ui.theme.dim)
+        "Add it in Settings > Security > Root servers.", ui.theme.dim)
     ui.text("")
     local entered = ui.input("Address, like you@zmail.root-a")
     if entered == "" then return end

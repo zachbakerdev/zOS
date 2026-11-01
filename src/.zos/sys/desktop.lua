@@ -32,12 +32,14 @@ while true do
     end
 
     for _, app in ipairs(list) do
-        add({ label = app.name, hint = app.description }, function()
-            local ok, err = apps.launch(app, session)
-            if not ok then showError(app, err) end
-        end)
+        if apps.canRun(app, session) then
+            add({ label = app.name, hint = app.description }, function()
+                local ok, err = apps.launch(app, session)
+                if not ok then showError(app, err) end
+            end)
+        end
     end
-    add({ label = "Settings", hint = "Passwords, users, network and updates" }, settings)
+    add({ label = "Settings", hint = "Passwords, users, security and updates" }, settings)
     add({ label = "Log out", hint = "Return to the login screen", fg = ui.theme.dim }, "logout")
     local staged = update.stagedVersion()
     add({ label = staged and ("Reboot (installs " .. staged .. ")") or "Reboot", fg = ui.theme.dim }, system.reboot)

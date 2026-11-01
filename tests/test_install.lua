@@ -137,6 +137,10 @@ local function computer(files, answers)
     },
     os = {
       getComputerID = function() return 7 end,
+      getComputerLabel = function() return nil end,
+      clock = function() return 0 end,
+      epoch = function() return 0 end,
+      queueEvent = function() end,
       reboot = function() c.reboots = c.reboots + 1 error("rebooted", 0) end,
       pullEvent = pullEvent,
       pullEventRaw = function() end,
@@ -156,12 +160,24 @@ local function computer(files, answers)
       set = function(k, v) c.settings[k] = v end,
       save = function(path) c.settingsSaved = path end,
     },
-    textutils = { unserialize = function(s)
-      local fn = load("return " .. s, "=image", "t", {})
-      if not fn then return nil end
-      local ok, v = pcall(fn)
-      return ok and v or nil
-    end },
+    textutils = {
+      unserialize = function(s)
+        local fn = load("return " .. s, "=image", "t", {})
+        if not fn then return nil end
+        local ok, v = pcall(fn)
+        return ok and v or nil
+      end,
+      serialize = function(v)
+        local function ser(x)
+          if type(x) == "string" then return string.format("%q", x) end
+          if type(x) ~= "table" then return tostring(x) end
+          local out = {}
+          for k, y in pairs(x) do out[#out + 1] = "[" .. ser(k) .. "]=" .. ser(y) end
+          return "{" .. table.concat(out, ",") .. "}"
+        end
+        return ser(v)
+      end,
+    },
     sleep = function() end,
   }, { __index = _G })
   return c
@@ -460,6 +476,142 @@ do
   check("menu: fits a pocket computer", run(c) and c.reboots == 1)
 end
 
+-- Root servers next to the image -------------------------------------------------------------------
+
+local cryptoText = assert(readHost("src/.zos/lib/crypto.lua"))
+local crypto = assert(load(cryptoText, "@crypto.lua", "t", setmetatable({ os = {
+  getComputerID = function() return 7 end, getComputerLabel = function() end,
+  clock = function() return 0 end, epoch = function() return 0 end,
+  queueEvent = function() end, pullEventRaw = function() end,
+} }, { __index = _G })))()
+
+local function signedRoot(seedByte, name, host, tld)
+  local seed = string.rep(string.char(seedByte), 32)
+  local public = crypto.signingPublicKey(seed)
+  local key = crypto.toHex(public)
+  return tld, {
+    key = key, name = name, host = host,
+    sig = crypto.toHex(crypto.sign(seed, "zos-zone-1|" .. tld .. "|" .. key, public)),
+  }
+end
+
+local function rootFile(roots, version)
+  local c = computer({})
+  return c.env.textutils.serialize({ ["zr:metadata"] = { version = version or 1 }, roots = roots })
+end
+
+local function withRoots(files, roots, version)
+  withImage(files, imageText({ ["/.zos/lib/crypto.lua"] = cryptoText }))
+  files["zos.zr"] = type(roots) == "string" and roots or rootFile(roots, version)
+  return files
+end
+
+local function savedRoots(c)
+  return c.files["etc/zos/net/roots"] and c.env.textutils.unserialize(c.files["etc/zos/net/roots"]) or {}
+end
+
+local tldA, rootA = signedRoot(1, "Root A", 10, "root-a")
+local tldB, rootB = signedRoot(2, "Root B", 11, "root-b")
+local _, rootC = signedRoot(3, "Root C", 12, "root-a")
+
+do
+  local c = computer(withRoots({}, { [tldA] = rootA, [tldB] = rootB }), { 1, 1, 2 })
+  check("roots: runs", run(c))
+  local fingerprint = crypto.fingerprint(crypto.fromHex(rootA.key))
+  check("roots: shows the fingerprint", table.concat(c.out, " "):find(fingerprint, 1, true) ~= nil)
+  local saved = savedRoots(c)
+  check("roots: trusts what was accepted", saved[rootA.key] and saved[rootA.key].tld == "root-a"
+    and saved[rootA.key].name == "Root A" and saved[rootA.key].host == 10)
+  check("roots: skips what wasn't", saved[rootB.key] == nil)
+  check("roots: no leftovers", c.files["etc/zos/net/roots.new"] == nil)
+  check("roots: installs", c.reboots == 1)
+end
+
+do
+  local c = computer(withRoots(installed(), { [tldA] = rootA }), { 2, 1 })
+  run(c)
+  check("roots: survives the clean reinstall", savedRoots(c)[rootA.key] ~= nil)
+  check("roots: the reinstall still deletes the rest", c.files["etc/zos/net/id"] == nil)
+end
+
+do
+  local files = withRoots(installed(), { [tldA] = rootC })
+  files["etc/zos/net/roots"] = computer({}).env.textutils.serialize({
+    [rootA.key] = { key = rootA.key, name = "Root A", host = 10, tld = "root-a" },
+  })
+  local c = computer(files, { 1, 1 })
+  check("taken tld: runs", run(c))
+  check("taken tld: says so", said(c, "owns that here"))
+  local saved = savedRoots(c)
+  check("taken tld: keeps the old root", saved[rootA.key] ~= nil)
+  check("taken tld: doesn't add the new one", saved[rootC.key] == nil)
+  check("taken tld: still upgrades", c.files["etc/zos/update/ready"] == "1.0.0")
+
+  local again = computer(withRoots(installed(), { [tldA] = rootA }), { 2, 1 })
+  again.files["etc/zos/net/roots"] = files["etc/zos/net/roots"]
+  run(again)
+  check("clean reinstall: the old owner no longer counts", savedRoots(again)[rootA.key] ~= nil)
+end
+
+do
+  local files = withRoots(installed(), { [tldA] = rootA })
+  files["etc/zos/net/roots"] = computer({}).env.textutils.serialize({
+    [rootB.key] = { key = rootB.key, name = "Root B", host = 11, tld = "root-b" },
+    [rootA.key] = { key = rootA.key, name = "Root A", host = 10, tld = "root-a" },
+  })
+  local c = computer(files, { 1 })
+  check("known root: isn't asked about again", run(c))
+  check("known root: keeps what was there", savedRoots(c)[rootB.key] ~= nil)
+end
+
+do
+  local c = computer({ ["disk/zos.zi"] = imageText({ ["/.zos/lib/crypto.lua"] = cryptoText }),
+    ["disk/zos.zr"] = rootFile({ [tldA] = rootA }) }, { 1, 1 })
+  c.program = "disk/startup.lua"
+  run(c)
+  check("roots: read from the disk", savedRoots(c)[rootA.key] ~= nil)
+end
+
+do
+  local files = withRoots({}, { [tldA] = rootA })
+  local c = computer(files, { 1 })
+  c.urls["https://example.com/z.zi"] = imageText()
+  run(c, "https://example.com/z.zi")
+  check("downloaded image: a local file isn't used", savedRoots(c)[rootA.key] == nil)
+end
+
+local function badRoots(name, roots, pattern, version)
+  local c = computer(withRoots({ ["startup.lua"] = "-- mine" }, roots, version))
+  run(c)
+  check("bad roots, " .. name .. ": refused", said(c, pattern))
+  check("bad roots, " .. name .. ": nothing changed", c.files["startup.lua"] == "-- mine" and not c.env.fs.exists(".zos"))
+end
+
+local function altered(root, field, value)
+  local out = {}
+  for k, v in pairs(root) do out[k] = v end
+  out[field] = value
+  return out
+end
+
+badRoots("garbage", "not a table", "damaged")
+badRoots("new version", { [tldA] = rootA }, "newer installer", 2)
+badRoots("short key", { [tldA] = altered(rootA, "key", "abcd") }, "damaged")
+badRoots("bad name", { [tldA] = altered(rootA, "name", "a/b") }, "damaged")
+badRoots("bad host", { [tldA] = altered(rootA, "host", "ten") }, "damaged")
+badRoots("bad tld", { ["Root.A"] = rootA }, "damaged")
+badRoots("moved to another tld", { ["other"] = rootA }, "signature")
+badRoots("forged", { [tldA] = altered(rootA, "key", rootB.key) }, "signature")
+badRoots("one key twice", { [tldA] = rootA, ["other"] = select(2, signedRoot(1, "Root A", 10, "other")) }, "damaged")
+
+do
+  local files = withImage({}, imageText())
+  files["zos.zr"] = rootFile({ [tldA] = rootA })
+  local c = computer(files)
+  run(c)
+  check("no crypto in the image: refused", said(c, "can't check the root servers"))
+end
+
 -- The real image, if it's been built -------------------------------------------------------------
 
 local real = readHost("dist/zos.zi")
@@ -467,6 +619,10 @@ if real then
   local c = computer(withImage({}, real), { 1 })
   check("real image: installs", run(c) and c.reboots == 1)
   check("real image: complete", c.files[".zos/sys/recovery.lua"] and c.files[".zos/apps/appman/app.manifest"])
+  local files = withImage({}, real)
+  files["zos.zr"] = rootFile({ [tldA] = rootA })
+  local withFile = computer(files, { 1, 1 })
+  check("real image: checks root servers with its own crypto", run(withFile) and savedRoots(withFile)[rootA.key] ~= nil)
 else
   print("Skipping the real image: run ./package first.")
 end

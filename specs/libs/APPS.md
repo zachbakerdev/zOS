@@ -81,7 +81,7 @@ Returns whether `path` can be a file in an app: relative, at most 128 bytes, and
 
 ### Manifests
 
-`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `priority` MUST be a number, and `minZos` MUST be a version.
+`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `priority` MUST be a number, `minZos` MUST be a version, and `admin` MUST be a boolean.
 
 A version MUST be exactly three whole numbers, major, minor and patch, separated by dots, such as `"1.0.0"`. Nothing else is a version: `"1.0"`, `"1.0.0.0"`, `"v1.0.0"` and `"1.0.0-beta"` are all refused.
 
@@ -108,6 +108,7 @@ Installed apps are described by an app record, which is also what `main.lua` rec
 | `author`      | string  | Its author, or `nil`                                           |
 | `priority`    | number  | Its priority. Defaults to `apps.DEFAULT_PRIORITY`, which is 100 |
 | `minZos`      | string  | The oldest zOS it runs on, or `nil`                            |
+| `admin`       | boolean | Whether only administrators can open it. Defaults to false     |
 | `dir`         | string  | Its folder, as an absolute path                                |
 | `main`        | string  | The absolute path of `main.lua`                                |
 | `service`     | string  | The absolute path of `service.lua`, or `nil` if it has none    |
@@ -164,9 +165,13 @@ An app's code runs in its own environment on top of the one the system libraries
 
 `require(name)` looks for `<name>.lua` in the app's folder first, with each `.` in the name as a `/`, then finds the system libraries. Each of the app's modules runs once, and `main.lua` and `service.lua` get separate copies.
 
+### apps.canRun(app, session)
+
+Returns whether `session` may open the app. It's true unless the app sets `admin` and the session isn't an administrator's. The desktop leaves out apps it's false for. Background services have no session, so they aren't affected.
+
 ### apps.launch(app, session)
 
-Clears the screen, runs `main.lua` with `...` = `session, app`, and puts the terminal back afterwards. While it runs, `os.pullEvent` raises `Terminated` on Ctrl+T, even though zOS itself ignores Ctrl+T.
+Returns `false` and a message without running anything if `apps.canRun` is false. Otherwise, clears the screen, runs `main.lua` with `...` = `session, app`, and puts the terminal back afterwards. While it runs, `os.pullEvent` raises `Terminated` on Ctrl+T, even though zOS itself ignores Ctrl+T.
 
 It returns `true` if the app finished or was stopped with Ctrl+T, or `false` and the error if it failed to load or crashed. A crash MUST NOT end the session.
 

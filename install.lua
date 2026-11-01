@@ -9,17 +9,20 @@
 --
 -- Copy this file to a floppy as install.lua or startup.lua, next to zos.zi, to make a setup disk.
 -- As startup.lua it runs by itself when a computer without zOS boots with the disk inserted.
+-- A zos.zr next to the image offers root servers to trust. See specs/formats/ZR_FORMAT.md.
 
 local RELEASE_IMAGE = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos.zi"
 local FORMAT_VERSION = 1
 local METADATA = "zi:metadata"
 local MIN_FILE_SIZE = 500 -- CC: Tweaked counts each file and folder as at least this many bytes
+local ROOTS_FILE, ROOTS_VERSION, ROOTS_METADATA = "zos.zr", 1, "zr:metadata"
 
 local SYSTEM, APPS = "/.zos", "/.zos/apps"
 local STAGE = "/.zos.install" -- the new system, until it's all on disk
 local STARTUP, STARTUP_NEW = "/startup.lua", "/startup.lua.install"
 local BACKUP = "/zos-backup"
 local DATA = "/etc/zos"
+local ROOTS = DATA .. "/net/roots" -- must match lib/trust.lua
 
 -- These must match lib/update.lua.
 local UPDATE = DATA .. "/update"
@@ -270,6 +273,54 @@ local function checkTarget(files)
     end
 end
 
+-- Checking the root servers ----------------------------------------------------------------------
+
+-- The image's own crypto library. The installer has none, and it needs no other library to load.
+local function loadCrypto(files)
+    local text = files[SYSTEM .. "/lib/crypto.lua"]
+    local fn = text and load(text, "@crypto.lua", "t", _ENV)
+    local ok, crypto = pcall(fn or error)
+    if not ok or type(crypto) ~= "table" then fail("This image can't check the root servers next to it.") end
+    return crypto
+end
+
+local function validRoot(crypto, tld, root)
+    return type(tld) == "string" and #tld <= 16 and tld:match("^[a-z0-9][a-z0-9%-]*$")
+        and type(root) == "table" and crypto.isHex(root.key, 64) and crypto.isHex(root.sig, 128)
+        and type(root.name) == "string" and #root.name <= 32 and root.name:match("^[%w%-_ %.]+$")
+        and type(root.host) == "number" and root.host >= 0 and root.host % 1 == 0
+end
+
+-- The root servers in the .zr file next to the image, sorted by name, or nil if there isn't one.
+-- See "Reading a file" in specs/formats/ZR_FORMAT.md.
+local function readRoots(imagePath, files)
+    local path = imagePath and fs.combine(fs.getDir(imagePath), ROOTS_FILE)
+    if not path or not fs.exists(path) or fs.isDir(path) then return nil end
+    say("Checking the root servers...")
+    local data = textutils.unserialize(readFile(path) or "")
+    if type(data) ~= "table" or type(data[ROOTS_METADATA]) ~= "table" or type(data.roots) ~= "table" then
+        fail(ROOTS_FILE .. " is damaged.")
+    end
+    if data[ROOTS_METADATA].version ~= ROOTS_VERSION then fail(ROOTS_FILE .. " needs a newer installer.") end
+
+    local crypto = loadCrypto(files)
+    local roots, keys = {}, {}
+    for tld, root in pairs(data.roots) do
+        if not validRoot(crypto, tld, root) or keys[root.key] then fail(ROOTS_FILE .. " is damaged.") end
+        local signed = "zos-zone-1|" .. tld .. "|" .. root.key
+        if not crypto.verify(crypto.fromHex(root.key), signed, crypto.fromHex(root.sig)) then
+            fail("The signature of " .. root.name .. " in " .. ROOTS_FILE .. " is wrong.")
+        end
+        keys[root.key] = true
+        roots[#roots + 1] = {
+            key = root.key, name = root.name, host = root.host, tld = tld,
+            fingerprint = crypto.fingerprint(crypto.fromHex(root.key)),
+        }
+    end
+    table.sort(roots, function(a, b) return a.name:lower() < b.name:lower() end)
+    return #roots > 0 and roots or nil
+end
+
 -- What's on this computer: "current" can be upgraded, "damaged" can only be replaced, and nil is
 -- a computer without zOS.
 local function detect()
@@ -308,6 +359,37 @@ local function chooseMode(found, version)
         { label = "Install", hint = "Moves startup files to " .. BACKUP .. ".", mode = "install" },
         CANCEL,
     })
+end
+
+local function trustedRoots()
+    local all = fs.exists(ROOTS) and textutils.unserialize(readFile(ROOTS) or "")
+    return type(all) == "table" and all or {}
+end
+
+-- Which of the file's roots to trust. A person has to compare each fingerprint, and a domain that
+-- another root already owns here stays with it, because a disk mustn't take a domain over.
+local function chooseRoots(roots, mode)
+    local trusted, chosen = mode == "reinstall" and {} or trustedRoots(), {}
+    for _, root in ipairs(roots) do
+        local owner
+        for key, other in pairs(trusted) do
+            if other.tld == root.tld and key ~= root.key then owner = other end
+        end
+        if owner then
+            menu(root.name .. " claims ." .. root.tld .. ", but " .. tostring(owner.name) ..
+                " owns that here, so it won't be added.", {
+                { label = "Continue", hint = "Remove the other root server first to use this one.", mode = true },
+            })
+        elseif not trusted[root.key] then
+            local trustIt = menu("Trust root server " .. root.name .. " for ." .. root.tld ..
+                "? Compare this fingerprint with the one the server shows: " .. root.fingerprint, {
+                { label = "Trust", hint = "It can certify any name in ." .. root.tld .. ".", mode = true },
+                { label = "Skip", hint = "Installs zOS without it.", mode = false },
+            })
+            if trustIt then chosen[#chosen + 1] = root end
+        end
+    end
+    return chosen
 end
 
 -- Installing -----------------------------------------------------------------------------------
@@ -411,6 +493,25 @@ local function install(files, mode, found)
     settings.save("/.settings")
 end
 
+-- The system is already in place, so a failure here is reported and doesn't stop the install.
+local function trustRoots(roots)
+    if #roots == 0 then return end
+    local all = trustedRoots()
+    for _, root in ipairs(roots) do
+        all[root.key] = { key = root.key, name = root.name, host = root.host, tld = root.tld }
+    end
+    local temp = ROOTS .. ".new"
+    local ok, why = writeChecked(temp, textutils.serialize(all))
+    if ok then
+        fs.delete(ROOTS)
+        fs.move(temp, ROOTS)
+    else
+        fs.delete(temp)
+        say("Couldn't save the root servers: " .. tostring(why), theme.bad)
+        sleep(3)
+    end
+end
+
 local function ejectSource(imagePath)
     if not imagePath or not disk then return end
     for _, side in ipairs(peripheral.getNames()) do
@@ -429,6 +530,7 @@ local function main()
     text = nil -- it's the biggest thing in memory
     local version = checkComplete(files)
     checkTarget(files)
+    local roots = readRoots(imagePath, files)
 
     local found = detect()
     local mode = chooseMode(found, version)
@@ -437,6 +539,7 @@ local function main()
         say("Cancelled. Nothing was changed.")
         return
     end
+    local chosen = roots and chooseRoots(roots, mode) or {}
 
     os.pullEvent = os.pullEventRaw -- Ctrl+T mustn't be able to leave a half-installed system
     screen()
@@ -446,6 +549,7 @@ local function main()
     else
         install(files, mode, found)
     end
+    trustRoots(chosen)
 
     ejectSource(imagePath)
     say("Done. Restarting...", theme.accent)

@@ -753,6 +753,36 @@ do
 end
 reset()
 
+-- One trusted root for each top-level domain.
+do
+  local one, two = rootServer(10, "One"), rootServer(11, "Two")
+  local other = rootServer(12, "Three")
+  sim.call(two, function() assert(two.db.setTld("one")) end)
+  sim.call(other, function() assert(other.db.setTld("three")) end)
+  local c = sim.computer(1)
+  local found = sim.call(c, function() return c.net.findRoots(2) end)
+  local byHost = {}
+  for _, entry in ipairs(found) do byHost[entry.host] = entry end
+  local function add(entry) return sim.call(c, function() return c.net.addRoot(entry) end) end
+
+  check("adds a root", add(byHost[10]))
+  check("and remembers its tld", trustOf(c).root(byHost[10].key).tld, "one")
+  local ok, why = add(byHost[11])
+  check("refuses a second root for a tld", ok, false)
+  check("says which root owns it", type(why) == "string" and why:find("One", 1, true) ~= nil)
+  check("the second isn't trusted", trustOf(c).root(byHost[11].key), nil)
+  check("adding the same root again is fine", add(byHost[10]))
+  check("another tld is fine", add(byHost[12]))
+  sim.powerOff(two)
+  local rootKey = byHost[11].key
+  trustOf(c).removeRoot(byHost[10].key)
+  trustOf(c).addRoot(rootKey, "Two", 11)
+  ok, why = add(byHost[10])
+  check("a root it can't check blocks adding", ok, false)
+  check("and says so", type(why) == "string" and why:find("Couldn't check", 1, true) ~= nil)
+end
+reset()
+
 -- A reply only goes to the key that asked.
 do
   local a, b = sim.computer(1), sim.computer(2)

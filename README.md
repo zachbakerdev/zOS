@@ -157,6 +157,7 @@ folder under `apps/`.
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
+| [`apps/storage`](apps/storage) | **Storage** | Searches chests on a wired network and moves items in and out through one chest, see [Storage](#storage) |
 | [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy, writes the latest release's installer and image to it with any root servers you choose, and labels it `zOS vX.X.X` |
 
 ### Making app disks
@@ -212,6 +213,34 @@ their next login.
 the session, even while nobody is logged in (Mail Server uses this to receive messages). The service
 gets `...` = `app`. Anything it draws goes to a hidden window, and it never sees Ctrl+T. If a service crashes, it stops and the error goes to `/etc/zos/system.log`.
 Nothing else is affected.
+
+### Storage
+
+The **Storage** app treats chests on a wired network as one store, with one chest as the way in
+and out. Connect each chest to the network with a wired modem, and right-click each modem to turn
+it on. Chests, barrels and other inventories all work.
+
+The first time it runs, it asks for two things, and **Settings** changes them later:
+
+- **I/O chest**: where items go in and come out. It defaults to a chest next to the computer. For
+  any other chest, choose **Find it by adding an item** and put something in it.
+- **Storage chests**: which chests the app may use. Chests and barrels start ticked on the first
+  run. Anything added later starts unticked, and the app never touches a chest that isn't ticked.
+  **Find a chest** finds one in the list when you change its contents.
+
+A chest next to the computer needs its own wired modem too, because CC: Tweaked can't move items
+between a chest attached by its side and one on a network. If that chest is empty, it looks like
+every other empty chest, so the app asks you to put an item in it. With no network at all, the
+chests touching the computer are used instead.
+
+**Store all** empties the I/O chest into storage. **Recall item** searches by name or item id, then
+fills the I/O chest with that item until it's full or there are none left. Take what you need, then
+press **Return items to storage**, which puts back what's left of the recalled items. It's the only
+way on from that screen. If the app is stopped first, the items stay in the I/O chest until the next
+**Store all**.
+
+Settings live in `/etc/storage/` and belong to the computer, so anyone who can log in can use the app
+and change them. Items with different NBT, such as damaged or enchanted tools, are listed separately.
 
 ## Networking
 

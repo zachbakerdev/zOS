@@ -46,9 +46,22 @@ def minify(name, source):
             return f.read()
 
 
+def minify_file(path, data):
+    """data minified, if it's a kind of file that can be."""
+    if path.endswith(".lua"):
+        return minify(path, data)
+    if path.endswith(".manifest"):
+        # A manifest is a bare table, which LuaSrcDiet only reads as part of a statement.
+        result = minify(path, b"return " + data).strip()
+        if not result.startswith(b"return"):
+            sys.exit(f"Minifying {path} gave something unexpected.")
+        return result[len(b"return"):].strip()
+    return data
+
+
 def minify_files(files):
-    """(path, bytes) pairs with every .lua file minified."""
-    return [(path, minify(path, data) if path.endswith(".lua") else data) for path, data in files]
+    """(path, bytes) pairs with every file minified that can be."""
+    return [(path, minify_file(path, data)) for path, data in files]
 
 
 if __name__ == "__main__":

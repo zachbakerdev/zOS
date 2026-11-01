@@ -1,5 +1,5 @@
 -- Known-answer tests for crypto.lua. Run from the repository root: luajit tests/test_crypto.lua
-package.path = "tests/?.lua;disk/payload/zos/lib/?.lua;" .. package.path
+package.path = "tests/?.lua;src/.zos/lib/?.lua;" .. package.path
 require("cc_shim")
 
 local cooperative = 0

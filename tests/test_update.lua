@@ -16,7 +16,7 @@ end
 
 local CURRENT, NEXT = "2.0.0", "9.0.0"
 local MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-update.manifest"
-local BUNDLE = "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/zos-update.bundle"
+local IMAGE = "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/zos.zi"
 
 local function readFile(path)
   local f = assert(io.open(path, "rb"))
@@ -24,24 +24,45 @@ local function readFile(path)
   f:close()
   return text
 end
-local STARTUP = readFile("disk/payload/startup.lua")
+local STARTUP = readFile("src/startup.lua")
 
 local function appText(c, id, version, minZos)
-  return c.env.textutils.serialize({ format = "zos-app", formatVersion = 1, id = id, files = {
+  return c.env.textutils.serialize({
+    ["za:metadata"] = { version = 1, id = id },
     ["main.lua"] = "print('hi')",
     ["app.manifest"] = '{ name = "' .. id .. '", version = "' .. version .. '"' ..
       (minZos and (', minZos = "' .. minZos .. '"') or "") .. ' }',
-  } })
+  })
 end
 
-local function bundleText(c, overrides)
-  local bundle = {
-    format = "zos-update", formatVersion = 1, version = NEXT,
-    files = { ["zos/boot.lua"] = "-- new boot", ["zos/lib/system.lua"] = "-- new lib", ["startup.lua"] = STARTUP },
-    apps = { terminal = appText(c, "terminal", "2.0"), mine = appText(c, "mine", "2.0"), other = appText(c, "other", "2.0") },
+-- A system image. Overrides replace entries, and false removes one.
+local function imageText(c, overrides)
+  local image = {
+    ["zi:metadata"] = { version = 1 },
+    ["/.zos/boot.lua"] = "-- new boot", ["/.zos/lib/system.lua"] = "-- new lib", ["/startup.lua"] = STARTUP,
   }
-  for k, v in pairs(overrides or {}) do bundle[k] = v end
-  return c.env.textutils.serialize(bundle)
+  for k, v in pairs(overrides or {}) do image[k] = v or nil end
+  return c.env.textutils.serialize(image)
+end
+
+local APPS_MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-apps.manifest"
+local function appUrl(id) return "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/" .. id .. ".za" end
+
+-- Publish these apps (id -> version, or { version, minZos }) as a list and .za files.
+local function publishApps(c, list)
+  local ids = {}
+  for id in pairs(list) do ids[#ids + 1] = id end
+  table.sort(ids)
+  local lines = { "zos-apps 1", "release=" .. NEXT }
+  for _, id in ipairs(ids) do
+    local version, minZos = list[id], nil
+    if type(version) == "table" then version, minZos = version[1], version[2] end
+    local text = appText(c, id, version, minZos)
+    c.site[appUrl(id)] = text
+    lines[#lines + 1] = "app=" .. table.concat({ id, version, #text, c.crypto.sha256(text), minZos or "",
+      "App " .. id, "About " .. id }, "\t")
+  end
+  c.site[APPS_MANIFEST] = table.concat(lines, "\n") .. "\nend\n"
 end
 
 -- A computer that believes it's running CURRENT, and a fake release.
@@ -54,14 +75,16 @@ local function setup(files)
   c.env.sleep = function() end
 
   c.site = {}
-  c.manifest = function(bundle, version)
-    return "zos-update 1\nversion=" .. (version or NEXT) .. "\nsize=" .. #bundle ..
-      "\nsha256=" .. crypto.sha256(bundle) .. "\nend\n"
+  c.fetched = {}
+  c.manifest = function(text, version)
+    return "zos-update 1\nversion=" .. (version or NEXT) .. "\nsize=" .. #text ..
+      "\nsha256=" .. crypto.sha256(text) .. "\nend\n"
   end
-  c.publish = function(bundle, version)
-    c.site[MANIFEST], c.site[BUNDLE] = c.manifest(bundle, version), bundle
+  c.publish = function(text, version)
+    c.site[MANIFEST], c.site[IMAGE] = c.manifest(text, version), text
   end
   c.env.http = { get = function(url)
+    c.fetched[url] = (c.fetched[url] or 0) + 1
     local text = c.site[url]
     if not text then return nil, "Not Found" end
     return { readAll = function() return text end, close = function() end }
@@ -97,9 +120,8 @@ local function boot(c, crashAt)
       reboot = function() coroutine.yield("reboot") end,
       pullEventRaw = function() error("waited for an event") end,
     }, { __index = c.env.os }),
-    loadfile = function()
-      local text = files["zos/boot.lua"]
-      if not text then return nil, "missing" end
+    load = function(text, name, mode, fenv)
+      if name ~= "@/.zos/boot.lua" then return load(text, name, mode, fenv) end
       return function()
         if text:find("broken", 1, true) then error("boot crashed", 0) end
         coroutine.yield("booted")
@@ -107,8 +129,7 @@ local function boot(c, crashAt)
     end,
     shell = {},
   }, { __index = c.env })
-  local fn = assert(loadstring(files["startup.lua"], "=startup"))
-  setfenv(fn, env)
+  local fn = assert(load(files["startup.lua"], "=startup", "t", env))
   local co = coroutine.create(fn)
   local ok, result = coroutine.resume(co)
   if not ok then error(result, 0) end
@@ -116,7 +137,7 @@ local function boot(c, crashAt)
 end
 
 local function installed(extra)
-  local files = { ["zos/boot.lua"] = "-- old boot", ["zos/lib/system.lua"] = "-- old lib", ["startup.lua"] = STARTUP }
+  local files = { [".zos/boot.lua"] = "-- old boot", [".zos/lib/system.lua"] = "-- old lib", ["startup.lua"] = STARTUP }
   for k, v in pairs(extra or {}) do files[k] = v end
   return files
 end
@@ -125,11 +146,10 @@ end
 
 do
   local c = setup(installed())
-  local bundle = bundleText(c)
+  local bundle = imageText(c)
   c.publish(bundle)
   local info = call(c, c.update.check)
   check("finds a newer version", info and info.version == NEXT)
-  check("remembers it", c.update.latest == info)
 
   c.publish(bundle, CURRENT)
   check("same version is up to date", call(c, c.update.check) == false)
@@ -149,7 +169,7 @@ end
 
 do
   local c = setup(installed())
-  local bundle = bundleText(c)
+  local bundle = imageText(c)
 
   check("only asks over HTTPS", c.update.RELEASES:sub(1, 8) == "https://")
 
@@ -165,13 +185,13 @@ do
 
   c.publish(bundle)
   info = call(c, c.update.check)
-  c.site[BUNDLE] = bundle:gsub("new boot", "bad boot")
+  c.site[IMAGE] = bundle:gsub("new boot", "bad boot")
   local ok
   ok, err = call(c, c.update.download, info)
-  check("refuses a changed bundle", not ok and err:find("changed", 1, true))
+  check("refuses a changed image", not ok and err:find("changed", 1, true))
   check("stores nothing when refused", not c.env.fs.exists("etc/zos/update/new"))
-  c.site[BUNDLE] = bundle .. " "
-  check("refuses a bundle of the wrong size", not call(c, c.update.download, info))
+  c.site[IMAGE] = bundle .. " "
+  check("refuses an image of the wrong size", not call(c, c.update.download, info))
 
   local function refused(name, text, wanted)
     c.publish(text)
@@ -180,17 +200,26 @@ do
     check(name, not good and why:find(wanted, 1, true))
     check(name .. " stores nothing", not c.env.fs.exists("etc/zos/update/new"))
   end
-  refused("refuses a future format", bundleText(c, { formatVersion = 2 }), "newer version of zOS")
-  refused("refuses the wrong version", bundleText(c, { version = "8.0.0" }), "different version")
-  refused("refuses missing system files", bundleText(c, { files = { ["startup.lua"] = "" } }), "no system files")
-  refused("refuses paths outside /zos", bundleText(c, { files = { ["zos/boot.lua"] = "", ["etc/zos/users.db"] = "" } }), "bad file name")
-  refused("refuses path escapes", bundleText(c, { files = { ["zos/boot.lua"] = "", ["zos/../etc/x"] = "" } }), "bad file name")
-  refused("refuses code that doesn't compile", bundleText(c, { files = { ["zos/boot.lua"] = "if" } }), "broken")
-  refused("refuses a broken app", bundleText(c, { apps = { mine = "junk" } }), "broken")
+  c.publish(c.env.textutils.serialize({ ["zi:metadata"] = { version = 2 }, ["/.zos/boot.lua"] = "", ["/startup.lua"] = "" }))
+  refused("refuses a future format", c.site[IMAGE], "newer version of zOS")
+  refused("refuses an image without a boot file", imageText(c, { ["/.zos/boot.lua"] = false }), "complete system")
+  refused("refuses an image without a startup file", imageText(c, { ["/startup.lua"] = false }), "complete system")
+  refused("refuses path escapes", imageText(c, { ["/.zos/../etc/x"] = "" }), "bad file name")
+  refused("refuses relative paths", imageText(c, { [".zos/x"] = "" }), "bad file name")
+  refused("refuses a file used as a folder", imageText(c, { ["/.zos/lib"] = "" }), "both a file and a folder")
+  refused("refuses code that doesn't compile", imageText(c, { ["/.zos/boot.lua"] = "if" }), "doesn't compile")
 
   c.files.freeSpace = 100
-  refused("refuses when the disk is too full", bundleText(c), "free")
+  refused("refuses when the disk is too full", imageText(c), "disk space")
   c.files.freeSpace = nil
+end
+
+do
+  local c = setup(installed({ ["etc/zos/users.db"] = "accounts" }))
+  c.publish(imageText(c, { ["/etc/zos/users.db"] = "taken", ["/.zos/apps/mine/main.lua"] = "-- from the image" }))
+  check("stages an image with other files", call(c, c.update.download, call(c, c.update.check)))
+  check("only stages the system", not c.env.fs.exists("etc/zos/update/new/etc") and c.files["etc/zos/users.db"] == "accounts")
+  check("doesn't stage apps", not c.env.fs.exists("etc/zos/update/new/apps"))
 end
 
 -- Installing, keeping what must be kept -------------------------------------------
@@ -198,49 +227,72 @@ end
 do
   local c = setup(installed({
     ["etc/zos/users.db"] = "accounts",
-    ["apps/mine/main.lua"] = "old", ["apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }',
+    [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }',
   }))
-  c.publish(bundleText(c))
-  check("tick downloads by itself", call(c, c.update.tick))
+  c.publish(imageText(c))
+  publishApps(c, { terminal = "2.0", mine = "2.0", other = "2.0" })
+  call(c, c.update.tick)
+  check("tick downloads by itself", c.fetched[IMAGE] == 1)
   check("waits for the next boot", c.update.stagedVersion() == NEXT)
-  check("running system is untouched", c.files["zos/boot.lua"] == "-- old boot")
-  check("skips what's already stored", not call(c, c.update.tick))
+  check("running system is untouched", c.files[".zos/boot.lua"] == "-- old boot")
+  call(c, c.update.tick)
+  check("skips what's already stored", c.fetched[IMAGE] == 1)
 
   check("boots", boot(c) == "booted")
-  check("new system in place", c.files["zos/boot.lua"] == "-- new boot")
-  check("nothing left of the old system", c.files["zos/lib/system.lua"] == "-- new lib")
+  check("new system in place", c.files[".zos/boot.lua"] == "-- new boot")
+  check("nothing left of the old system", c.files[".zos/lib/system.lua"] == "-- new lib")
   check("old version kept for now", c.env.fs.exists("etc/zos/update/old/boot.lua"))
+  check("installed apps carried over", c.files[".zos/apps/mine/main.lua"] == "old")
 
   c.env.require("system").VERSION = NEXT
   call(c, c.update.finish)
   check("accounts kept", c.files["etc/zos/users.db"] == "accounts")
-  check("installed app upgraded", c.files["apps/mine/main.lua"] == "print('hi')")
-  check("built-in app installed", c.env.fs.exists("apps/terminal/main.lua"))
-  check("doesn't install other apps", not c.env.fs.exists("apps/other"))
+  check("installed app upgraded", c.files[".zos/apps/mine/main.lua"] == "print('hi')")
+  check("built-in app installed", c.env.fs.exists(".zos/apps/terminal/main.lua"))
+  check("doesn't install other apps", not c.env.fs.exists(".zos/apps/other"))
   check("cleans up", not c.env.fs.exists("etc/zos/update/new") and not c.env.fs.exists("etc/zos/update/old")
     and not c.env.fs.exists("etc/zos/update/trial"))
-  check("logs it", c.files["etc/zos/system.log"]:find("updated to " .. NEXT, 1, true))
-  check("next boot is normal", boot(c) == "booted" and c.files["zos/boot.lua"] == "-- new boot")
+  check("app updates aren't left due", not c.env.fs.exists("etc/zos/update/apps-due"))
+  check("logs it", c.files["etc/zos/system.log"]:find("Updated to zOS " .. NEXT, 1, true))
+  check("next boot is normal", boot(c) == "booted" and c.files[".zos/boot.lua"] == "-- new boot")
+end
+
+do -- Offline when the update finishes: the apps catch up later.
+  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }' }))
+  c.publish(imageText(c))
+  call(c, c.update.tick)
+  boot(c)
+  c.env.require("system").VERSION = NEXT
+  call(c, c.update.finish)
+  check("offline: apps stay due", c.env.fs.exists("etc/zos/update/apps-due"))
+  publishApps(c, { mine = "2.0" })
+  call(c, c.update.tick)
+  check("offline: tick catches up", c.files[".zos/apps/mine/main.lua"] == "print('hi')")
+  check("offline: no longer due", not c.env.fs.exists("etc/zos/update/apps-due"))
 end
 
 do
   local c = setup(installed())
-  c.env.require("system").setAutoUpdate(false, "test")
-  c.publish(bundleText(c))
-  check("off: finds it", not call(c, c.update.tick) and c.update.latest.version == NEXT)
-  check("off: doesn't download", c.update.stagedVersion() == nil)
+  local system = c.env.require("system")
+  system.setConfig({ autoUpdate = false })
+  c.publish(imageText(c))
+  call(c, c.update.tick)
+  check("off: doesn't download", c.update.stagedVersion() == nil and not c.fetched[IMAGE])
 
-  c.env.require("system").setAutoUpdate(true, "test")
-  check("on: downloads", call(c, c.update.tick))
+  system.setConfig({ autoUpdate = true })
+  call(c, c.update.tick)
+  check("on: downloads", c.update.stagedVersion() == NEXT)
   call(c, c.update.finish)
   check("a stored update survives a boot that didn't apply it", c.update.stagedVersion() == NEXT)
 end
 
 do
   local c = setup(installed({ ["startup.lua"] = "-- old startup\n" .. STARTUP }))
-  c.publish(bundleText(c))
+  c.publish(imageText(c))
   call(c, c.update.tick)
   check("boots after replacing itself", boot(c) == "booted")
+  check("keeps /startup.lua during the trial", c.files["startup.lua"] ~= STARTUP)
+  call(c, c.update.finish)
   check("replaces /startup.lua", c.files["startup.lua"] == STARTUP)
 end
 
@@ -248,21 +300,22 @@ end
 
 do
   local c = setup(installed())
-  c.publish(bundleText(c, { files = { ["zos/boot.lua"] = "-- broken boot" } }))
+  c.publish(imageText(c, { ["/.zos/boot.lua"] = "-- broken boot" }))
+  publishApps(c, { terminal = "2.0" })
   call(c, c.update.tick)
   check("falls back and reboots", boot(c) == "reboot")
-  check("old version restored", c.files["zos/boot.lua"] == "-- old boot" and c.files["zos/lib/system.lua"] == "-- old lib")
+  check("old version restored", c.files[".zos/boot.lua"] == "-- old boot" and c.files[".zos/lib/system.lua"] == "-- old lib")
   check("remembers what failed", c.update.failedVersion() == NEXT)
-  check("doesn't try it again", boot(c) == "booted" and c.files["zos/boot.lua"] == "-- old boot")
+  check("doesn't try it again", boot(c) == "booted" and c.files[".zos/boot.lua"] == "-- old boot")
   call(c, c.update.finish)
-  check("no apps from the failed update", not c.env.fs.exists("apps/terminal"))
-  check("rollback logged", c.files["etc/zos/system.log"]:find("failed to boot", 1, true))
-  check("won't redownload it by itself", not call(c, c.update.tick) and c.update.stagedVersion() == nil)
+  check("no apps from the failed update", not c.env.fs.exists(".zos/apps/terminal"))
+  call(c, c.update.tick)
+  check("won't redownload it by itself", c.update.stagedVersion() == nil)
 
-  c.publish(bundleText(c))
+  c.publish(imageText(c))
   local info = call(c, c.update.check)
   check("an admin can still choose to", call(c, c.update.download, info))
-  check("then it installs", boot(c) == "booted" and c.files["zos/boot.lua"] == "-- new boot")
+  check("then it installs", boot(c) == "booted" and c.files[".zos/boot.lua"] == "-- new boot")
   c.env.require("system").VERSION = NEXT
   call(c, c.update.finish)
   check("failure forgotten after a good install", c.update.failedVersion() == nil)
@@ -270,31 +323,11 @@ end
 
 -- Apps from the same release ---------------------------------------------------------
 
-local APPS_MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-apps.manifest"
-local function appUrl(id) return "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/" .. id .. ".zapp" end
-
--- Publish these apps (id -> version, or { version, minZos }) as a list and .zapp files.
-local function publishApps(c, list)
-  local ids = {}
-  for id in pairs(list) do ids[#ids + 1] = id end
-  table.sort(ids)
-  local lines = { "zos-apps 1", "release=" .. NEXT }
-  for _, id in ipairs(ids) do
-    local version, minZos = list[id], nil
-    if type(version) == "table" then version, minZos = version[1], version[2] end
-    local text = appText(c, id, version, minZos)
-    c.site[appUrl(id)] = text
-    lines[#lines + 1] = "app=" .. table.concat({ id, version, #text, c.crypto.sha256(text), minZos or "",
-      "App " .. id, "About " .. id }, "\t")
-  end
-  c.site[APPS_MANIFEST] = table.concat(lines, "\n") .. "\nend\n"
-end
-
 local function withApps(extra)
   return installed({
-    ["apps/old/main.lua"] = "old", ["apps/old/app.manifest"] = '{ name = "old", version = "1.0" }',
-    ["apps/same/main.lua"] = "same", ["apps/same/app.manifest"] = '{ name = "same", version = "2.0" }',
-    ["apps/ahead/main.lua"] = "ahead", ["apps/ahead/app.manifest"] = '{ name = "ahead", version = "5.0" }',
+    [".zos/apps/old/main.lua"] = "old", [".zos/apps/old/app.manifest"] = '{ name = "old", version = "1.0" }',
+    [".zos/apps/same/main.lua"] = "same", [".zos/apps/same/app.manifest"] = '{ name = "same", version = "2.0" }',
+    [".zos/apps/ahead/main.lua"] = "ahead", [".zos/apps/ahead/app.manifest"] = '{ name = "ahead", version = "5.0" }',
   })
 end
 
@@ -325,14 +358,14 @@ do
   entry.sha256 = c.crypto.sha256(c.site[appUrl("old")])
   entry.size = #c.site[appUrl("old")]
   none, err = call(c, c.update.downloadApp, entry)
-  check("refuses an app that isn't the one listed", not none and err:find("match", 1, true))
+  check("refuses an app that isn't the one listed", not none and err:find("listed", 1, true))
 
   publishApps(c, { old = "2.0" })
   c.site[APPS_MANIFEST] = c.site[APPS_MANIFEST]:sub(1, -5)
   none, err = call(c, c.update.checkApps)
   check("refuses a cut-off list", not none and err:find("damaged", 1, true))
 
-  c.site[APPS_MANIFEST] = c.manifest("bundle")
+  c.site[APPS_MANIFEST] = c.manifest("image")
   none = call(c, c.update.checkApps)
   check("a zOS manifest doesn't pass as an app list", none == nil)
 
@@ -357,8 +390,7 @@ local function pick(c, n)
   key(c, "enter")
 end
 local function appman(c, admin)
-  local fn = assert(loadfile("apps/appman/main.lua"))
-  setfenv(fn, c.env)
+  local fn = assert(load(readFile("apps/appman/main.lua"), "@main.lua", "t", c.env))
   return sim.spawn(c, fn, { user = "me", admin = admin }, {})
 end
 
@@ -368,8 +400,8 @@ do
   c.env.require("system").VERSION = NEXT
   publishApps(c, { old = "2.0", same = "2.0", fresh = "1.0", other = "3.0" })
   c.site[appUrl("other")] = nil -- this one fails partway through
-  c.files["apps/other/main.lua"] = "other"
-  c.files["apps/other/app.manifest"] = '{ name = "other", version = "1.0" }'
+  c.files[".zos/apps/other/main.lua"] = "other"
+  c.files[".zos/apps/other/app.manifest"] = '{ name = "other", version = "1.0" }'
   appman(c, true)
   check("App Manager offers GitHub", screenHas(c, "Get apps from GitHub"))
   key(c, "enter")
@@ -380,12 +412,12 @@ do
 
   key(c, "enter")
   check("asks first", screenHas(c, "Install 2 update(s)?"))
-  check("nothing changed yet", c.files["apps/old/main.lua"] == "old")
+  check("nothing changed yet", c.files[".zos/apps/old/main.lua"] == "old")
   char(c, "y")
   check("reports the failure", screenHas(c, "Not Found"))
-  check("keeps going after a failure", c.files["apps/old/main.lua"] == "print('hi')")
-  check("leaves the failed app alone", c.files["apps/other/main.lua"] == "other")
-  check("doesn't install new apps", not c.env.fs.exists("apps/fresh"))
+  check("keeps going after a failure", c.files[".zos/apps/old/main.lua"] == "print('hi')")
+  check("leaves the failed app alone", c.files[".zos/apps/other/main.lua"] == "other")
+  check("doesn't install new apps", not c.env.fs.exists(".zos/apps/fresh"))
   check("logs the install", c.files["etc/zos/system.log"]:find("installed app old 2.0", 1, true))
   key(c, "enter")
   screenHas(c, "Get apps from GitHub")
@@ -399,7 +431,7 @@ do
   check("shows the usual install screen", screenHas(c, "Install it?"))
   char(c, "y")
   check("installs it", screenHas(c, "Installed fresh 1.0"))
-  check("files in place", c.files["apps/fresh/main.lua"] == "print('hi')")
+  check("files in place", c.files[".zos/apps/fresh/main.lua"] == "print('hi')")
   key(c, "enter")
   screenHas(c, "Get apps from GitHub")
 
@@ -420,7 +452,7 @@ do
   check("anyone can look", screenHas(c, "Update all (1)"))
   key(c, "enter")
   check("only admins can install", screenHas(c, "Only administrators"))
-  check("nothing installed", c.files["apps/old/main.lua"] == "old")
+  check("nothing installed", c.files[".zos/apps/old/main.lua"] == "old")
 end
 
 -- Apps that need a newer zOS ----------------------------------------------------------
@@ -441,7 +473,7 @@ do
   local pkg = parsed("3.0")
   local app, err = apps.install(pkg)
   check("install refuses a newer minZos", not app and err:find("needs zOS 3.0", 1, true))
-  check("install leaves nothing behind", not c.env.fs.exists("apps/x"))
+  check("install leaves nothing behind", not c.env.fs.exists(".zos/apps/x"))
   check("install allows a met minZos", apps.install(parsed("2.0")))
   check("minZos is kept on the app", apps.get("x").minZos == "2.0")
 
@@ -465,7 +497,7 @@ do
   -- Update all, App same, App fresh, App old, Back.
   pick(c, 3)
   check("explains and points to updates", screenHas(c, "Settings > Updates"))
-  check("old version stays", c.files["apps/old/main.lua"] == "old")
+  check("old version stays", c.files[".zos/apps/old/main.lua"] == "old")
   key(c, "enter")
   screenHas(c, "Get apps from GitHub")
   key(c, "enter")
@@ -475,31 +507,31 @@ do
   check("Update all leaves it out", not c.screenText():find("App old", 1, true))
   char(c, "y")
   screenHas(c, "Everything is up to date")
-  check("the rest updates", c.files["apps/same/app.manifest"]:find('"3.0"', 1, true))
-  check("still not installed", c.files["apps/old/main.lua"] == "old")
+  check("the rest updates", c.files[".zos/apps/same/app.manifest"]:find('"3.0"', 1, true))
+  check("still not installed", c.files[".zos/apps/old/main.lua"] == "old")
 end
 
 do -- Installing from a file gets the same check.
   local c = setup(withApps())
-  c.files["new.zapp"] = appText(c, "fresh", "1.0", "3.0")
+  c.files["new.za"] = appText(c, "fresh", "1.0", "3.0")
   appman(c, true)
   screenHas(c, "Install from file")
   pick(c, 2)
   screenHas(c, "Path")
-  c.env.os.queueEvent("sim_line", "new.zapp")
+  c.env.os.queueEvent("sim_line", "new.za")
   check("a file gets the same check", screenHas(c, "needs zOS 3.0"))
-  check("nothing installed from the file", not c.env.fs.exists("apps/fresh"))
+  check("nothing installed from the file", not c.env.fs.exists(".zos/apps/fresh"))
 end
 
-do -- An update whose app needs more than the update provides is logged, and zOS still boots.
-  local c = setup(installed({ ["apps/mine/main.lua"] = "old", ["apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }' }))
-  c.publish(bundleText(c, { apps = { mine = appText(c, "mine", "2.0", "99.0") } }))
+do -- An update whose app needs more than the update provides is skipped, and zOS still boots.
+  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }' }))
+  c.publish(imageText(c))
+  publishApps(c, { mine = { "2.0", "99.0" } })
   call(c, c.update.tick)
-  boot(c)
+  check("boots with an app it can't run", boot(c) == "booted")
   c.env.require("system").VERSION = NEXT
   call(c, c.update.finish)
-  check("skips an app it can't run", c.files["apps/mine/main.lua"] == "old")
-  check("logs why", c.files["etc/zos/system.log"]:find("needs zOS 99.0", 1, true))
+  check("skips an app it can't run", c.files[".zos/apps/mine/main.lua"] == "old")
 end
 
 -- A power cut at every step ---------------------------------------------------------
@@ -518,14 +550,14 @@ local function powerCuts(name, text, finalBoot)
       attempts = attempts + 1
     until result == "booted" or attempts > 3
     check(name .. ": comes back after a cut at step " .. n, result == "booted")
-    check(name .. ": right version after a cut at step " .. n, c.files["zos/boot.lua"] == finalBoot)
+    check(name .. ": right version after a cut at step " .. n, c.files[".zos/boot.lua"] == finalBoot)
     n = n + 1
   end
   check(name .. ": tried every step", n > 2)
 end
 
-powerCuts("update", function(c) return bundleText(c) end, "-- new boot")
-powerCuts("rollback", function(c) return bundleText(c, { files = { ["zos/boot.lua"] = "-- broken boot" } }) end, "-- old boot")
+powerCuts("update", function(c) return imageText(c) end, "-- new boot")
+powerCuts("rollback", function(c) return imageText(c, { ["/.zos/boot.lua"] = "-- broken boot" }) end, "-- old boot")
 
 if failed > 0 then
   print(("update: %d passed, %d FAILED"):format(passed, failed))

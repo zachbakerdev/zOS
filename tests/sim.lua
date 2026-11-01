@@ -3,8 +3,7 @@
 
 require("cc_shim")
 
--- ZOS_LIB=src/.zos/lib/ runs the apps on the new system libraries.
-local LIB = os.getenv("ZOS_LIB") or "disk/payload/zos/lib/"
+local LIB = "src/.zos/lib/"
 
 local sim = { computers = {}, wire = {}, onPacket = nil }
 local clock = 1700000000000

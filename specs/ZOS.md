@@ -120,7 +120,7 @@ An app contains:
 
 `require` finds the app's own modules first, then the system libraries. Apps with a lower `priority` are listed and started first.
 
-App Manager, Terminal and Files are built-in apps. They can be upgraded but not removed.
+App Manager, Terminal and Files are built-in apps. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
 
 ### Services
 
@@ -128,15 +128,15 @@ A service is a coroutine that runs alongside the session. Services get their tur
 
 ## Installation
 
-zOS is installed from a setup disk, which runs by itself when a computer without zOS boots with it inserted. Setup MUST load and check its files before changing anything on the computer.
+zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it's given, or the latest release. On a setup disk it's named `startup.lua`, so that it runs by itself when a computer without zOS boots with the disk inserted. Setup MUST load and check the whole image before changing anything on the computer.
 
 | Mode            | Result                                                         |
 | --------------- | -------------------------------------------------------------- |
-| Install         | Backs up startup files, installs zOS, creates an administrator |
-| Upgrade         | Replaces the system files, keeps users, apps and settings      |
-| Clean reinstall | Deletes all accounts and keys, creates a new administrator     |
+| Install         | Backs up startup files, installs zOS                           |
+| Upgrade         | Stages the system as an update, keeps users, apps and settings |
+| Clean reinstall | Deletes all accounts, keys and settings, installs zOS          |
 
-Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup discards any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
+The first boot creates the administrator after an install or clean reinstall. Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup replaces any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
 
 System files are distributed as a .zi image. See [ZI_FORMAT.md](formats/ZI_FORMAT.md).
 

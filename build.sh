@@ -1,8 +1,7 @@
 #!/bin/sh
-# Builds everything into dist/: the app packages, the app disk writer and the setup disk writer.
-# Options are passed to both scripts, e.g. ./build.sh --no-minify (or --upload, --public).
+# Builds everything a release publishes into dist/. See tools/make_update.py.
+# Options are passed on, e.g. ./build.sh --no-minify.
 set -e
 cd "$(dirname "$0")"
 
-python3 tools/make_apps.py --disk "$@"
-python3 tools/make_disk.py "$@"
+python3 tools/make_update.py "$@"

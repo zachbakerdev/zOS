@@ -234,25 +234,6 @@ do
 end
 reset()
 
--- A root from before top-level domains gets one and can keep renewing old dotted names
-do
-  local root = rootServer(10, "Old Root")
-  local c = sim.computer(1)
-  local entry = trustRoot(c, root)
-  sim.call(c, function() return c.net.requestCertificate(entry, "plain") end)
-  local requests = root.db.requests()
-  requests[keyOf(c)].name = "old.name"
-  root.files["etc/root-server/requests"] = root.env.textutils.serialize(requests)
-  approve(root, c, "old.name")
-  local config = root.db.config()
-  root.db.setConfig({ zone = false })
-  check("zone is missing", not root.db.config().zone)
-  sim.call(root, function() root.db.ensureZone() end)
-  check("zone from the name", root.db.config().zone.tld, "old-root")
-  check("old name renews", sim.call(c, function() return c.net.requestCertificate(entry, "old.name") end), "issued")
-end
-reset()
-
 -- Lying about zones and hosts -------------------------------------------------
 
 -- A zone can only be signed by the root it names
@@ -771,29 +752,6 @@ do
 end
 reset()
 
--- Accounts from before mail was encrypted are brought over at their next sign-in
-do
-  local root = rootServer(10, "Root A")
-  local server = mailServer(1, root, "zmail.root-a")
-  account(server, "alice")
-  local util = server.env.require("util")
-  local accounts = util.readTable("/etc/mail-server/accounts")
-  accounts.alice.key, accounts.alice.sealed = nil, nil
-  util.writeTable("/etc/mail-server/accounts", accounts)
-  local id = string.rep("d", 32)
-  util.writeTable("/etc/mail-server/boxes/alice/" .. id, { id = id, from = "a@b.c", to = {}, subject = "Old", body = "from before", date = 1 })
-  util.writeTable("/etc/mail-server/boxes/alice/index", { { id = id, from = "a@b.c", subject = "Old", date = 1, read = false } })
-
-  check("no key yet", (server.db.publicKey("alice")), nil)
-  local c = clientComputer(2, { root })
-  local alice = assert(signIn(c, "alice@zmail.root-a"))
-  check("got a key", cryptoOf(c).toHex(alice.public), server.db.publicKey("alice"))
-  check("old mail is sealed", has(server.files["etc/mail-server/boxes/alice/" .. id], "from before"), false)
-  local answer = assert(op(c, alice, "read", { id = id }))
-  check("and readable", sim.call(c, function() return c.client.decrypt(alice, answer.message) end), "from before")
-end
-reset()
-
 -- The screens -----------------------------------------------------------------
 
 do
@@ -903,51 +861,6 @@ do
   check("reply sent", screenHas(c, "Sent."))
   sim.run(function() return #server.db.index("alice") == 2 end, 60)
   check("quotes the original", has(bodyOf(server, "alice", server.db.index("alice")[1].id), "> Buy diamonds"))
-end
-reset()
-
--- Data from older versions --------------------------------------------------------
-
-do
-  local c = sim.computer(70)
-  c.files["etc/zos/root-server/key"] = "root key"
-  c.files["etc/zos/mail-server/accounts"] = "accounts"
-  c.files["etc/zos/mail-server/boxes/alice/index"] = "index"
-  c.files["etc/zos/mail-client/me"] = "my account"
-  c.files["etc/zos/mail-client/you"] = "their account"
-  c.files["etc/zos/users.db"] = "users"
-
-  c.appDir = "apps/root-server/"
-  c.env.require("rootdb")
-  check("root data moved", c.files["etc/root-server/key"], "root key")
-  check("root data gone from /etc/zos", c.files["etc/zos/root-server/key"], nil)
-
-  local server = sim.computer(71)
-  server.files["etc/zos/mail-server/accounts"] = "accounts"
-  server.files["etc/zos/mail-server/boxes/alice/index"] = "index"
-  server.appDir = "apps/mail-server/"
-  server.env.require("maildb")
-  check("mail server data moved", server.files["etc/mail-server/accounts"], "accounts")
-  check("mailboxes moved", server.files["etc/mail-server/boxes/alice/index"], "index")
-  check("mail server data gone from /etc/zos", server.files["etc/zos/mail-server/accounts"], nil)
-  check("system data stays", c.files["etc/zos/users.db"], "users")
-
-  local kept = sim.computer(72)
-  kept.files["etc/zos/mail-server/accounts"] = "old"
-  kept.files["etc/mail-server/accounts"] = "new"
-  kept.appDir = "apps/mail-server/"
-  kept.env.require("maildb")
-  check("newer data isn't overwritten", kept.files["etc/mail-server/accounts"], "new")
-
-  local me = sim.computer(73)
-  me.files["etc/zos/mail-client/me"] = "my account"
-  me.files["etc/zos/mail-client/you"] = "their account"
-  me.appDir = "apps/mail/"
-  local client = me.env.require("mailclient")
-  client.load({ user = "me" })
-  check("mail account moved", me.files["home/me/.config/mail/account"], "my account")
-  check("mail account gone from /etc/zos", me.files["etc/zos/mail-client/me"], nil)
-  check("other users' accounts wait for them", me.files["etc/zos/mail-client/you"], "their account")
 end
 reset()
 

@@ -1,6 +1,6 @@
 # zOS apps
 
-Each folder here is one app. `tools/make_apps.py` packs it into a single `.zapp` file, which the
+Each folder here is one app. `tools/make_apps.py` packs it into a single `.za` file, which the
 App Manager installs.
 
 ```
@@ -22,7 +22,7 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
     description = "Write and keep notes", -- shown on the desktop and in App Manager
     priority = 10,                       -- lower comes first on the desktop and starts first (default 100)
     author = "you",
-    minZos = "2.1",                      -- optional: the oldest zOS it runs on
+    minZos = "1.0",                      -- optional: the oldest zOS it runs on
 }
 ```
 
@@ -46,25 +46,25 @@ when installing, so raise `minZos` before people need it, not after.
 ## Packaging
 
 ```
-python3 tools/make_apps.py                # dist/apps/<id>.zapp for every app
+python3 tools/make_apps.py                # dist/apps/<id>.za for every app
 python3 tools/make_apps.py notes          # only some
-python3 tools/make_apps.py --disk         # also dist/zos-apps-disk.lua: `pastebin run` it to write the apps onto a floppy
-python3 tools/make_apps.py --upload       # also upload each .zapp to Pastebin (needs PASTEBIN_DEV_KEY)
+python3 tools/make_apps.py --upload       # also upload each .za to Pastebin (needs PASTEBIN_DEV_KEY)
 ```
 
-In App Manager, use **Install from disk** with that floppy, **Install from file...** with a path,
+In App Manager, use **Install from disk** with a `.za` file copied onto a floppy, **Install from file...** with a path,
 or **Install from URL or Pastebin...** with a link or paste code. Only admins can install or
 remove apps.
 
-A `.zapp` file is one `textutils.serialize`-style table:
+A `.za` file is one table of the app's files, as described in `specs/formats/ZA_FORMAT.md`:
 
 ```lua
-{ format = "zos-app", formatVersion = 1, id = "notes", files = { ["main.lua"] = "...", ... } }
+{ ["za:metadata"] = { version = 1, id = "notes" }, ["main.lua"] = "...", ... }
 ```
 
 Each release includes every app here. To ship a change, raise `version` in its `app.manifest`:
 computers only update to a higher version. **Get apps from GitHub** in App Manager installs and
 updates them.
 
-The apps in `BUILT_IN_APPS` in `tools/make_disk.py` (currently App Manager, Terminal and Files) go on the setup
-disk. Setup installs them, and they can be upgraded but not removed.
+The apps listed in `src/.zos/lib/builtin.lua` (currently App Manager, Terminal and Files) are built in.
+`./package` copies them from this folder into the system image, so keep no copy in `src/`. They can be
+upgraded but not removed.

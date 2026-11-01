@@ -4,7 +4,7 @@ package.path = "tests/?.lua;" .. package.path
 
 local sim = require("sim")
 
-local SETTINGS = os.getenv("ZOS_LIB") and "src/.zos/sys/settings.lua" or "disk/payload/zos/sys/settings.lua"
+local SETTINGS = "src/.zos/sys/settings.lua"
 
 local failed, passed = 0, 0
 local function check(name, ok)

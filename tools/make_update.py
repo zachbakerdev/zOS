@@ -1,51 +1,35 @@
 #!/usr/bin/env python3
-"""Pack zOS into the files that computers update themselves from.
+"""Build everything a GitHub release publishes, and that computers update themselves from.
 
-    dist/zos-update.bundle     a serialised Lua table of the system files and every app
-    dist/zos-update.manifest   the version, size and SHA-256 of the bundle
-    dist/apps/<id>.zapp         the apps, for App Manager
-    dist/zos-apps.manifest     the version, size and SHA-256 of each .zapp
+    dist/zos.zi                the system image, from ./package
+    dist/zos-update.manifest   the version, size and SHA-256 of zos.zi
+    dist/apps/<id>.za          every app in apps/
+    dist/zos-apps.manifest     the version, size and SHA-256 of each .za
+    dist/install.lua           the installer
 
     python3 tools/make_update.py
 
-Lua files are minified (see minify_lua.py) unless you pass --no-minify.
+The manifests are described in specs/libs/UPDATE.md. Every file is minified (see minify_lua.py)
+unless you pass --no-minify.
 """
 
 import argparse
 import hashlib
 import os
+import shutil
+import subprocess
 import sys
 
-from make_apps import find_apps, pack
-from make_disk import DISK, ROOT, collect_files, lua_string, read_version
-from minify_lua import minify_files
+from make_apps import ROOT, find_apps, pack, read_version
+from minify_lua import minify
 
 FORMAT_VERSION = 1
 DEFAULT_OUT_DIR = os.path.join(ROOT, "dist")
 
 
-def build_bundle(version, minify, packages):
-    files = collect_files(os.path.join(DISK, "payload"))
-    if minify:
-        files = minify_files(files)
-    out = [
-        "{",
-        '  format = "zos-update",',
-        f"  formatVersion = {FORMAT_VERSION},",
-        f"  version = {lua_string(version.encode())},",
-        "  files = {",
-    ]
-    out += [f"    [{lua_string(path.encode())}] = {lua_string(data)}," for path, data in files]
-    out += ["  },", "  apps = {"]
-    for app, _, text in packages:
-        out.append(f"    [{lua_string(app['id'].encode())}] = {lua_string(text.encode())},")
-    out += ["  },", "}"]
-    return ("\n".join(out) + "\n").encode("ascii")
-
-
-def build_manifest(version, bundle):
-    sha256 = hashlib.sha256(bundle).hexdigest()
-    return f"zos-update {FORMAT_VERSION}\nversion={version}\nsize={len(bundle)}\nsha256={sha256}\nend\n".encode("ascii")
+def build_manifest(version, image):
+    sha256 = hashlib.sha256(image).hexdigest()
+    return f"zos-update {FORMAT_VERSION}\nversion={version}\nsize={len(image)}\nsha256={sha256}\nend\n".encode("ascii")
 
 
 def build_apps_manifest(version, packages):
@@ -61,37 +45,39 @@ def build_apps_manifest(version, packages):
     return ("\n".join(lines) + "\nend\n").encode("utf-8")
 
 
+def write(path, data):
+    with open(path, "wb") as f:
+        f.write(data)
+    print(f"Wrote {os.path.relpath(path)}: {len(data) / 1000:.1f} KB")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-o", "--output-dir", default=DEFAULT_OUT_DIR, help="where to write the files (default: dist/)")
-    parser.add_argument("--no-minify", action="store_true", help="keep the Lua files' comments and indentation")
+    parser.add_argument("--no-minify", action="store_true", help="keep the files' comments and indentation")
     args = parser.parse_args()
 
     version = read_version()
+    # Emptied first, so that an app that's been removed can't be published by accident.
+    apps_dir = os.path.join(args.output_dir, "apps")
+    shutil.rmtree(apps_dir, ignore_errors=True)
+    os.makedirs(apps_dir)
+
+    zi = os.path.join(args.output_dir, "zos.zi")
+    subprocess.run([os.path.join(ROOT, "package"), "-o", zi] + (["--no-minify"] if args.no_minify else []), check=True)
+    with open(zi, "rb") as f:
+        write(os.path.join(args.output_dir, "zos-update.manifest"), build_manifest(version, f.read()))
+
     packages = []
     for app in find_apps():
         manifest, _, text = pack(app, not args.no_minify)
         packages.append((app, manifest, text))
-    bundle = build_bundle(version, not args.no_minify, packages)
+        write(os.path.join(apps_dir, f"{app['id']}.za"), text.encode("ascii"))
+    write(os.path.join(args.output_dir, "zos-apps.manifest"), build_apps_manifest(version, packages))
 
-    # Written here so the .zapp files on the release are the ones the list describes.
-    os.makedirs(os.path.join(args.output_dir, "apps"), exist_ok=True)
-    for app, _, text in packages:
-        with open(os.path.join(args.output_dir, "apps", f"{app['id']}.zapp"), "w", encoding="ascii", newline="\n") as f:
-            f.write(text)
-    out = os.path.join(args.output_dir, "zos-update.bundle")
-    with open(out, "wb") as f:
-        f.write(bundle)
-    print(f"Wrote {os.path.relpath(out)}: zOS {version}, {len(bundle) / 1024:.0f} KB")
-
-    out = os.path.join(args.output_dir, "zos-update.manifest")
-    with open(out, "wb") as f:
-        f.write(build_manifest(version, bundle))
-    print(f"Wrote {os.path.relpath(out)}")
-    out = os.path.join(args.output_dir, "zos-apps.manifest")
-    with open(out, "wb") as f:
-        f.write(build_apps_manifest(version, packages))
-    print(f"Wrote {os.path.relpath(out)}: {len(packages)} apps")
+    with open(os.path.join(ROOT, "install.lua"), "rb") as f:
+        installer = f.read()
+    write(os.path.join(args.output_dir, "install.lua"), installer if args.no_minify else minify("install.lua", installer))
 
 
 if __name__ == "__main__":

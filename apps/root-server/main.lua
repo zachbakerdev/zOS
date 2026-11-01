@@ -196,7 +196,6 @@ if not session.admin then
 end
 
 if not db.ready() then setup() end
-db.ensureZone()
 
 local selected = 1
 while true do

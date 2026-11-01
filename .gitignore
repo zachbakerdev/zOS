@@ -1,3 +1,4 @@
 dist
 __pycache__
 lua_modules
+src/.zos/apps

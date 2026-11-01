@@ -2,7 +2,7 @@
 
 `require("update")` finds new versions of zOS in GitHub releases, checks them and stores them for the next boot. It also lists the apps in the latest release. The process as a whole is described in [Updates](../ZOS.md#updates), and `/startup.lua` does the swap at boot.
 
-Like [ZOS.md](../ZOS.md), this document describes how zOS is meant to work. [Current state](#current-state) lists where the code differs.
+Like [ZOS.md](../ZOS.md), this document describes how zOS is meant to work.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -27,7 +27,7 @@ Manifests are plain text, read as data. Each starts with a header line and MUST 
 
 ```
 zos-update 1
-version=3.0.1
+version=1.0
 size=86412
 sha256=<64 hex characters>
 end
@@ -35,7 +35,7 @@ end
 
 ```
 zos-apps 1
-release=3.0.1
+release=1.0
 app=<id>\t<version>\t<size>\t<sha256>\t<minZos>\t<name>\t<description>
 end
 ```
@@ -128,9 +128,3 @@ Everything is in `/etc/zos/update/`, and these paths MUST match `/startup.lua`.
 ## Security
 
 The HTTPS connection to GitHub is the only proof of where an update came from, so whatever GitHub serves for this repository runs as system code. The sizes and hashes catch damaged downloads, not deliberate changes. See [Security](APPS.md#security) for how this compares with other sources of apps.
-
-## Current state
-
-| Target                                         | Code today                                                  |
-| ---------------------------------------------- | ----------------------------------------------------------- |
-| Releases publish `zos.zi` and `<id>.za` images | `.github/workflows/release.yml` and `tools/make_update.py` still publish `zos-update.bundle` and `.zapp` files, built from `disk/payload`. The library can't read those |

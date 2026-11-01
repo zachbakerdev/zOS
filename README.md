@@ -13,30 +13,17 @@ computers.
 
 ## Quick start
 
-```
-python3 tools/make_disk.py --upload    # needs PASTEBIN_DEV_KEY; or upload dist/zos-disk.lua yourself
-```
-
-In game, put a floppy in a disk drive and run `pastebin run <code>` to write the setup disk.
-Then put that disk in a drive next to the computer you want zOS on and reboot it.
-
-## Making a setup disk
-
-The `disk/` folder is the contents of the setup floppy. You can get it onto a floppy in two ways.
-
-### From Pastebin
-
-`tools/make_disk.py` packs `disk/` into a single Lua program, `dist/zos-disk.lua`, that writes
-the setup disk when you run it in game. You don't need access to the world
-save.
+On a computer with internet access, run:
 
 ```
-python3 tools/make_disk.py                  # writes dist/zos-disk.lua
-python3 tools/make_disk.py -o other.lua     # or somewhere else
-python3 tools/make_disk.py --upload         # and uploads it to Pastebin (unlisted)
-python3 tools/make_disk.py --upload --public
-python3 tools/make_disk.py --no-minify      # keep comments and indentation in the Lua files
+wget run https://github.com/zachbakerdev/zOS/releases/latest/download/install.lua
 ```
+
+## Building and releasing
+
+`./build.sh` builds everything a release publishes into `dist/`: the system image `zos.zi`, every
+app as `apps/<id>.za`, a minified `install.lua` and the manifests computers update from. Pass
+`--no-minify` to keep comments and indentation. `./package` builds only `zos.zi`.
 
 Minifying needs LuaSrcDiet. Install it once, from the repository root (this needs Lua 5.1 and
 its headers, e.g. Debian's `lua5.1` and `liblua5.1-0-dev`):
@@ -45,78 +32,45 @@ its headers, e.g. Debian's `lua5.1` and `liblua5.1-0-dev`):
 luarocks --tree lua_modules --lua-version=5.1 install luasrcdiet 1.0.0-2
 ```
 
-`--upload` needs a Pastebin API key in `PASTEBIN_DEV_KEY` (get one at
-<https://pastebin.com/doc_api>). Without it, upload `dist/zos-disk.lua` by hand. Then, in game,
-with a floppy in a disk drive:
+To publish a release, set `VERSION` in `src/.zos/lib/system.lua`, then push a tag that matches it.
+`.github/workflows/release.yml` runs the tests, builds everything with `./build.sh` and publishes
+the release.
 
 ```
-pastebin run <code>                         # the first floppy found
-pastebin run <code> <side>                  # the floppy in the drive on that side
-pastebin run <code> some/folder             # a folder instead of a floppy
-```
-
-- If the floppy isn't empty, the program lists what's on it and asks before erasing it, so you
-  can reuse an old setup disk.
-- It checks there's enough free space, reads each file back after writing it, and labels the
-  floppy `zOS Setup <version>`.
-- Lua files are minified with [LuaSrcDiet](https://github.com/jirutka/luasrcdiet), which also
-  checks that each one compiles to the same bytecode as before. Line numbers in error messages
-  won't match the source, so use `--no-minify` when debugging.
-- A floppy holds 125 KB, which the setup files only fit into minified. With `--no-minify`, write
-  to a folder instead.
-- Files are stored as escaped strings, one per line, so Pastebin's line-ending and whitespace
-  changes can't alter them.
-- After changing zOS, run the script again and upload the new version.
-
-### From the world save
-
-1. In game, put a floppy in a disk drive and run `label set <side> zos-setup`. This gives the
-   floppy an ID, which `id <side>` prints.
-2. Copy the *contents* of `disk/` into that floppy's folder:
-   - singleplayer: `.minecraft/saves/<world>/computercraft/disk/<id>/`
-   - server: `<world>/computercraft/disk/<id>/`
-
-   You should end up with `.../disk/<id>/install.lua`, `.../disk/<id>/payload/...` and so on.
-
-### From a GitHub release
-
-Each [release](https://github.com/zachbakerdev/zOS/releases) has the setup disk writer, the app
-disk writer and every `.zapp` file. In game, with a floppy in a disk drive:
-
-```
-wget run https://github.com/zachbakerdev/zOS/releases/latest/download/zos-disk.lua
-```
-
-To publish a release, set `system.VERSION` in `disk/payload/zos/lib/system.lua`, then push a tag
-that matches it. `.github/workflows/release.yml` runs the tests, builds everything and
-publishes the release.
-
-```
-git tag v2.0.0
-git push origin v2.0.0
+git tag v1.0
+git push origin v1.0
 ```
 
 ## Installing and upgrading
 
-Put the setup disk in a drive next to the target computer, then either:
+`install.lua` installs zOS from a `.zi` system image. Build one with `./package`, which writes
+`dist/zos.zi`. On a computer with internet access, run:
 
-- **reboot the computer.** A computer without zOS boots from the disk and setup starts by
-  itself, or
-- **run `disk/install`** from the shell. On a computer that already has zOS, log in and open the
-  Terminal app to do this.
+```
+wget run https://raw.githubusercontent.com/zachbakerdev/zOS/main/install.lua
+```
 
-For a new install, setup asks for:
+That downloads `zos.zi` from the latest release. To use a particular image, pass its path or URL:
+`install some/file.zi` or `install https://...`.
 
-1. **An administrator account:** a username and a password (at least 4 characters, typed twice).
-2. **A computer label** (optional).
+To make a setup disk, copy `zos.zi` and `install.lua` to a floppy. Name the script `startup.lua`
+and a computer without zOS will run it when it boots with the disk inserted. Keep only one copy
+of the script, because two won't fit on a default floppy with the image.
 
-It then backs up any existing `/startup` or `/startup.lua` to `/zos-backup/`, copies zOS onto
-the computer, creates the account, **turns off disk boot**, ejects the disk and reboots.
+The image is fully checked before anything changes. Then, on a computer without zOS, the installer
+copies any `/startup` or `/startup.lua` to `/zos-backup/`, installs the system, **turns off disk
+boot**, ejects the disk and reboots. The first boot asks for an administrator account and a
+computer label.
 
-If zOS is already installed, setup offers two options:
+If zOS is already installed, it offers two options:
 
-- **Upgrade** replaces the system files and keeps users, apps and settings.
-- **Clean reinstall** deletes all accounts and their keys, then asks for a new admin account.
+- **Upgrade** keeps users, apps and settings. The system is staged like an update, so it's rolled
+  back if it doesn't boot. Apps aren't changed, and the first boot updates them from the release.
+- **Clean reinstall** deletes all accounts, keys and system settings, and the first boot asks for
+  a new admin account. Apps and user files stay.
+
+If an install is damaged, only a clean reinstall is offered, and the startup files are copied to
+`/zos-backup/` first.
 
 ### Updates
 
@@ -140,7 +94,8 @@ update that's waiting.
   from Settings. Apps aren't touched until the boot has got that far. An update that boots but has
   bugs later isn't undone: use a setup disk or publish a newer release.
 
-The folders are in `/etc/zos/update/`, and each step is logged to `/etc/zos/system.log`.
+The folders are in `/etc/zos/update/`. Downloaded and finished updates are logged to
+`/etc/zos/system.log`.
 
 ## Using zOS
 
@@ -158,8 +113,9 @@ The folders are in `/etc/zos/update/`, and each step is logged to `/etc/zos/syst
 | **Files**       | Browse folders; create, edit, copy, move and delete files and folders. To run a program, use the Terminal |
 | **Terminal**    | The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
 | **App Manager** | Install and remove apps |
-| **Settings**    | Change your password, set the computer label, view the network; admins also manage users, root servers and secure boot |
-| **About**       | System information |
+
+These can be upgraded but not removed. The desktop also has **Settings**, for your password, the
+computer label and the network. Admins also manage users, root servers, updates and secure boot there.
 
 ### Secure boot
 
@@ -178,8 +134,8 @@ Upgrades keep it, and a clean install or reinstall turns secure boot back on.
 
 ### Optional apps
 
-These apps aren't on the setup disk. Each lives in its own folder under `apps/`, which has a
-README with the details.
+These apps aren't in the system image, so install them with App Manager. Each lives in its own
+folder under `apps/`.
 
 | folder                           | app            | what it does |
 |----------------------------------|----------------|--------------|
@@ -188,25 +144,10 @@ README with the details.
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 
-Upgrading from zOS 1.2 or earlier removes the old built-in Mail, Notes and Calculator apps but
-keeps their data (`/etc/zos/mail/`, `/home/<user>/notes/`). Install the apps again to get them
-back.
-
 ### Making app disks
 
-`tools/make_app_disks.py` does for apps what `tools/make_disk.py` does for the setup disk. It
-packs each app into a program that writes the app onto a floppy:
-
-```
-python3 tools/make_app_disks.py              # every app: dist/zos-mail-disk.lua, dist/zos-notes-disk.lua, ...
-python3 tools/make_app_disks.py notes calc   # only these ("notes" and "zos-notes" both work)
-python3 tools/make_app_disks.py -o out/      # write them somewhere other than dist/
-python3 tools/make_app_disks.py --upload     # and upload each one to Pastebin (--public works too)
-```
-
-In game, `pastebin run <code>` (or `pastebin run <code> <side>`) writes the app's folder onto
-the floppy and labels it `zOS <app> <version>`. You can also copy an app's folder (e.g.
-`apps/zos-notes/notes/`) onto a floppy through the world save, as with the setup disk.
+Copy an app's `.za` file onto a floppy, from a release or from `dist/apps/` after `./build.sh`.
+**Install from disk** in the App Manager finds any `.za` file in the top folder of a floppy.
 
 ### Installing apps
 
@@ -220,55 +161,40 @@ for doing this from the Terminal, and [APPS.md](specs/libs/APPS.md) the library 
 
 ### Writing apps
 
-An app is a folder with a manifest and a main program:
+An app is a folder with a manifest and a main program, installed to `/.zos/apps/<id>/`:
 
 ```
-/apps/myapp/app.manifest
-/apps/myapp/main.lua
+/.zos/apps/myapp/app.manifest
+/.zos/apps/myapp/main.lua
 ```
 
 ```lua
--- app.manifest (a textutils-serialised table)
+-- app.manifest
 {
   name = "My App",
   description = "Shown at the bottom of the desktop",
   version = "1.0",
   author = "you",
-  minZos = "2.1",          -- optional: the oldest zOS it runs on
-  main = "main.lua",
-  service = "service.lua", -- optional, see below
+  priority = 10,           -- optional: lower comes first (default 100)
+  minZos = "1.0",          -- optional: the oldest zOS it runs on
 }
 ```
 
-The desktop lists every folder with a manifest in `/zos/apps` (built-in apps) and `/apps`
-(installed apps). Apps are ordinary CraftOS programs started with `shell.run`, so `shell`,
-`require` and Ctrl+T work as usual. Ctrl+T stops only the app, never the session.
-
-Apps also get a global `zos` table:
-
-| field               | contents |
-|---------------------|----------|
-| `zos.version`       | zOS version string |
-| `zos.session`       | `{ user = "name", admin = true/false, since = epoch_ms, secretKey = ..., publicKey = ... }` |
-| `zos.ui`            | the UI toolkit (`menu`, `pager`, `screen`, `text`, `input`, `message`, `confirm`, ...) |
-| `zos.apps`          | the app registry (`list`, `install`, `remove`, ...) |
-| `zos.auth`          | the account API |
-| `zos.crypto`        | X25519, ChaCha20, HMAC-SHA256, `seal`/`open`, `sealTo`/`openSealed`, `lock`/`unlock`, random bytes |
-| `zos.keys`          | users' key pairs and pinned remote keys |
-| `zos.import(name)`  | load a system library from `/zos/lib` |
-| `zos.addStatus(fn)` | add text to the desktop's title bar; `fn(session)` returns a short string or nil |
-| `zos.log(text)`     | append a line to `/etc/zos/system.log` |
+The desktop lists every installed app. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only
+the app, never the session. `session` holds `user`, `admin`, `since`, `secretKey` and `publicKey`.
+`require` finds the app's own modules first, then the system libraries, such as `ui`, `apps`, `auth`,
+`crypto`, `keys`, `net` and `system`. See [apps/README.md](apps/README.md) and
+[APP_STANDARDS.md](specs/APP_STANDARDS.md), which says where an app keeps its data.
 
 **User keys.** Every user has an X25519 key pair, created at their first login. The secret key
-is encrypted with their password and unlocked into `zos.session` at login, so apps can encrypt
+is encrypted with their password and unlocked into the session at login, so apps can encrypt
 data that only that user can read (Mail does this). Changing your own password keeps your key.
 If an admin resets someone else's password, the old key is lost and that user gets a new one at
 their next login.
 
-**Background services.** If the manifest names a `service` file, zOS starts it at boot and runs
-it alongside the session, even while nobody is logged in (Mail uses this to receive messages).
-The service gets its app's folder as `...`. Services must not draw to the screen and should use
-`os.pullEventRaw`. If a service crashes, it stops and the error goes to `/etc/zos/system.log`.
+**Background services.** If an app has a `service.lua`, zOS starts it at boot and runs it alongside
+the session, even while nobody is logged in (Mail Server uses this to receive messages). The service
+gets `...` = `app`. Anything it draws goes to a hidden window, and it never sees Ctrl+T. If a service crashes, it stops and the error goes to `/etc/zos/system.log`.
 Nothing else is affected.
 
 ## Networking
@@ -372,9 +298,8 @@ It's an ordinary certificate name, so it's requested, approved and renewed in th
 
 Each root server has one top-level domain, which it asks for at setup and signs with its root key.
 It's separate from the server's name, so renaming the server doesn't move anyone's hostname. It can
-only change under **Top-level domain** in the Root Server app while no hostname is using it. Root
-servers set up before zOS 2.1 get one made from their name. A root server only signs hostnames in
-its own top-level domain, and names without a dot work as they always have.
+only change under **Top-level domain** in the Root Server app while no hostname is using it. A root
+server only signs hostnames in its own top-level domain, and names without a dot aren't affected.
 
 ```lua
 local found, err = net.resolve("zmail.root-a")                 -- { host, id, key, root }
@@ -433,8 +358,6 @@ queued while it's away.
 - **Only the account's owner can keep its mail.** Changing your password in Mail re-locks the same
   key, and needs the current password. An admin's **Reset password** can't open the key, so it makes
   a new one, and mail already in the mailbox stays unreadable.
-- **Accounts from before Mail 1.1** get a key, and have their mailbox encrypted, at their next
-  sign-in. Until then they can't receive mail, and what's in their mailbox stays unencrypted.
 - **A server vouches for its own addresses.** The hostname in a sender's address is proven. The
   account name in front of it is only as honest as that server.
 - **Passwords only travel when signing in or changing them,** and are stored salted and hashed.
@@ -459,7 +382,7 @@ logged in.
    accept only if they match exactly. Then do the same on the other computer: neither serves a
    computer it hasn't added.
 2. **Share files.** Under **Shared files → Share a file**, enter a path. Single files only, and
-   nothing from `/etc`, `/zos`, `/rom` or `/startup.lua`, which hold passwords and keys.
+   nothing from `/etc`, `/.zos`, `/rom` or `/startup.lua`, which hold passwords and keys.
 3. **Download.** Under **Computers**, pick the computer, then **Browse files**. Files are saved
    to `/home/<user>/downloads/`, and never over an existing file.
 
@@ -491,22 +414,21 @@ Signatures are slow in Lua, so the first message to a computer takes noticeably 
 ones after it. The work happens in the background, so packets aren't lost in the meantime.
 
 ## How it works
-## How it works
 
 ### Boot
 
 ```
-CraftOS bios -> shell -> /startup.lua -> /zos/boot.lua -> login -> desktop
+CraftOS bios -> shell -> /startup.lua -> /.zos/boot.lua -> login -> desktop
 ```
 
 - **Disk boot stays off.** CraftOS decides whether to run a floppy's `startup` *before* it runs
   `/startup.lua`, based on the `shell.allow_disk_startup` setting. zOS sets it to `false` in
   `/.settings` at install time, on every boot, and before every reboot or shutdown.
 - **`/startup.lua` never returns.** It replaces `os.pullEvent` with `os.pullEventRaw` so Ctrl+T
-  can't stop it, then runs `/zos/boot.lua` inside `pcall`. If boot crashes, it shows a recovery
+  can't stop it, then runs `/.zos/boot.lua` inside `pcall`. If boot crashes, it shows a recovery
   prompt, where an admin login opens a recovery shell, and then reboots. It never falls through
   to an open shell.
-- **`/zos/boot.lua`** secures the boot settings, loads the libraries, adds `/zos/bin` to the
+- **`/.zos/boot.lua`** secures the boot settings, loads the libraries, adds `/.zos/bin` to the
   shell path and scans the installed apps, with a progress bar. It then loops login → desktop →
   logout forever. An error anywhere logs you out instead of crashing the computer.
 
@@ -514,57 +436,48 @@ CraftOS bios -> shell -> /startup.lua -> /zos/boot.lua -> login -> desktop
 
 - Accounts are stored in `/etc/zos/users.db`. Each password is stored as a 200-round SHA-256 hash
   with a random 16-byte salt, never in plain text.
-- The login lock is stored in `/etc/zos/lockout`, which is why rebooting doesn't clear it.
+- The login lock is stored in `/etc/zos/LOCKOUT`, which is why rebooting doesn't clear it.
 
 ### Files on the computer
 
 | path               | contents |
 |--------------------|----------|
 | `/startup.lua`     | bootstrap |
-| `/zos/`            | the system (replaced on upgrade) |
+| `/.zos/`           | the system (replaced on upgrade) |
+| `/.zos/apps/`      | apps, which are kept on upgrade |
 | `/etc/zos/`        | accounts, keys, network identity, config, log, updates in progress |
+| `/etc/<id>/`       | each app's own data |
 | `/home/<user>/`    | users' files |
-| `/apps/`           | installed apps |
 | `/zos-backup/`     | your old startup file, if you had one |
 
-Upgrades only replace `/startup.lua` and `/zos/`.
+Upgrades only replace `/startup.lua` and the system in `/.zos/`.
 
 ## Project layout
 
 ```
+install.lua               the installer
+package                   builds the system image, dist/zos.zi
+build.sh                  builds everything a release publishes into dist/
 tools/
-  make_disk.py            packs disk/ into dist/zos-disk.lua, which writes the setup disk
-  make_app_disks.py       packs each app in apps/ into dist/<app>-disk.lua, which writes an app disk
-  make_update.py          packs the update that computers download
-apps/                     optional apps: root-server, fileshare, mail, mail-server
+  make_apps.py            packs each app in apps/ into a .za file
+  make_update.py          builds the image, apps, manifests and minified installer
+  minify_lua.py           minifies Lua with LuaSrcDiet
+apps/                     every app, including the built-in ones
 specs/                    how zOS is meant to work, see Specifications
-tests/                    off-game tests: luajit tests/test_crypto.lua, test_net.lua, test_ui.lua, test_fileshare.lua, test_mail.lua, test_files.lua, test_update.lua
-disk/                     the setup floppy
-  startup.lua             starts setup when a computer without zOS boots from the disk
-  install.lua             the setup program
-  payload/                copied onto the computer
-    startup.lua           -> /startup.lua
-    zos/                  -> /zos
-      boot.lua            boot stages and the session loop
-      lib/sha256.lua      password hashing
-      lib/auth.lua        accounts and login throttling
-      lib/apps.lua        app registry, install, remove, launch
-      lib/ui.lua          terminal UI toolkit
-      lib/crypto.lua      X25519, Ed25519, ChaCha20, SHA-256/512, HMAC, random numbers
-      lib/keys.lua        per-user key pairs, pinned keys
-      lib/trust.lua       the computer's identity, trusted root servers, certificates
-      lib/net.lua         encrypted messages over modems
-      lib/update.lua      finds, checks and stores updates
-      sys/login.lua       login screen
-      sys/desktop.lua     app launcher
-      apps/               built-in apps: files, shell, appman, settings, about
-dist/                     generated programs
+tests/                    off-game tests, run from the repository root with luajit or lua5.2
+src/                      mirrors the target computer
+  startup.lua             -> /startup.lua
+  .zos/                   -> /.zos
+    boot.lua              boot stages and the session loop
+    bin/                  shell programs, such as appman
+    lib/                  system libraries
+    sys/                  login, desktop, settings, setup and recovery screens
 ```
 
 ## Specifications
 
 The specifications describe how zOS is meant to work, not how the current code works. Where they
-differ, they are the target. For example, they use `/.zos` where the code still uses `/zos`.
+differ, they are the target.
 
 | specification | what it covers |
 |---------------|----------------|
@@ -595,7 +508,7 @@ differ, they are the target. For example, they use `/.zos` where the code still 
   accounts and keys.
 - **The world files are always a way in.** Anyone with access to the world or server files can
   get around zOS.
-- **A broken install can't be fixed from a disk.** If `/zos` is damaged and recovery can't load,
+- **A broken install can't be fixed from a disk.** If `/.zos` is damaged and recovery can't load,
   the computer keeps rebooting, and because disk boot is off, a setup disk can't fix it. Repair
   the files in the world save (`computercraft/computer/<id>/`), or delete `.settings` there to
   turn disk boot back on.
@@ -605,7 +518,7 @@ differ, they are the target. For example, they use `/.zos` where the code still 
 From the Terminal:
 
 ```
-delete /startup.lua /zos /etc/zos /home
+delete /startup.lua /.zos /etc/zos /home
 set shell.allow_disk_startup true
 ```
 

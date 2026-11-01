@@ -18,7 +18,6 @@ db.MAX_SUBJECT = 64
 db.MAX_RECIPIENTS = 8
 
 local DIR = "/etc/mail-server"
-local OLD_DIR = "/etc/zos/mail-server" -- where zOS 2 kept this
 local CONFIG = fs.combine(DIR, "config")
 local ACCOUNTS = fs.combine(DIR, "accounts")
 local OUTBOX = fs.combine(DIR, "outbox")
@@ -37,13 +36,6 @@ local MAX_FAILURES = 5
 local LOCK = 60000 -- ms
 local POSTMASTER = "postmaster" -- bounces come from here, so nobody can have this account
 local MAX_KNOWN_KEYS = 256
-
--- Bring over what an older version saved. The app and its service both get here, and nothing
--- here yields, so only the first one moves it.
-if fs.exists(OLD_DIR) and not fs.exists(DIR) then
-    fs.makeDir("/etc")
-    fs.move(OLD_DIR, DIR)
-end
 
 local failures = {} -- user -> { count, untilMs }
 
@@ -200,7 +192,7 @@ function db.createAccount(user, password)
     local key = newKey(password)
     local accounts = loadAccounts()
     if accounts[user] then return nil, "That name is taken." end
-    accounts[user] = { salt = salt, hash = hash, key = key, sealed = true, tokens = {}, created = now() }
+    accounts[user] = { salt = salt, hash = hash, key = key, tokens = {}, created = now() }
     saveAccounts(accounts)
     return true
 end
@@ -264,31 +256,6 @@ local function newToken(user)
     return token
 end
 
--- Accounts from before mail was encrypted get their key at their next sign-in, the first time the
--- password is here, and what's in their mailbox is sealed then. One key does for all of it, because
--- sealing to a public key is slow and someone is waiting to sign in.
-local function upgrade(user, password)
-    local account = loadAccounts()[user]
-    local cert = account.key or newKey(password)
-    local accounts = loadAccounts()
-    accounts[user].key = cert
-    saveAccounts(accounts)
-
-    local key = crypto.randomBytes(32)
-    local sealed = crypto.sealTo(crypto.fromHex(cert.public), key)
-    for _, entry in ipairs(db.index(user)) do
-        local path = boxPath(user, entry.id)
-        local message = util.readTable(path)
-        if message and type(message.body) == "string" then
-            message.body, message.key = crypto.seal(key, message.body), sealed
-            util.writeTable(path, message)
-        end
-    end
-    accounts = loadAccounts()
-    accounts[user].sealed = true
-    saveAccounts(accounts)
-end
-
 -- Swap a password for a token. Returns the token, or nil and a reason.
 function db.login(user, password)
     if type(user) ~= "string" or type(password) ~= "string" then return nil, "Wrong account or password." end
@@ -300,7 +267,6 @@ function db.login(user, password)
         return nil, "Wrong account or password."
     end
     failures[user] = nil
-    if not account.sealed then upgrade(user, password) end
     return newToken(user)
 end
 
@@ -318,7 +284,6 @@ function db.changePassword(user, old, new)
         return nil, "That isn't your password."
     end
     failures[user] = nil
-    if not account.key then return db.setPassword(user, new) end
 
     local secret = crypto.unlock(old, account.key.locked)
     if not secret then return nil, "Your key can't be decrypted with this password." end
@@ -344,7 +309,6 @@ end
 function db.publicKey(user)
     local account = loadAccounts()[user]
     if not account then return nil, "no such account" end
-    if not account.key then return nil, "this account has to sign in again before it can get mail" end
     return account.key.public
 end
 

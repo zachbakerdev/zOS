@@ -1,7 +1,0 @@
-{
-    name = "Files",
-    description = "Browse folders; create, edit, copy, move and delete files",
-    version = "1.0.1",
-    author = "zOS",
-    priority = 10,
-}

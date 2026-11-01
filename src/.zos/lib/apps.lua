@@ -1,5 +1,6 @@
 -- Finds, checks, installs, removes and runs apps. See specs/libs/APPS.md.
 
+local builtin = require("builtin")
 local image = require("image")
 local services = require("services")
 local system = require("system")
@@ -10,8 +11,10 @@ local apps = {
     DEFAULT_PRIORITY = 100,
     FORMAT_VERSION = 1,
     METADATA = "za:metadata",
-    PROTECTED = { appman = true, terminal = true, files = true },
+    PROTECTED = {},
 }
+
+for _, id in ipairs(builtin) do apps.PROTECTED[id] = true end
 
 -- Ids and paths --------------------------------------------------------------------------------
 

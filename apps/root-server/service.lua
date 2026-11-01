@@ -6,7 +6,6 @@ local db = require("rootdb")
 local net = require("net")
 
 net.listen(net.ROOT_PORT)
-if db.ready() then db.ensureZone() end
 
 local function serving()
     return db.ready() and db.config().online

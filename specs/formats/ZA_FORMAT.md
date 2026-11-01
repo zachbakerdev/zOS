@@ -90,7 +90,7 @@ Folders are not stored. A folder exists on the target only because a file inside
 Writers SHOULD write:
 
 - `za:metadata` first, then the entries sorted by path, one per line, so that the same input always gives the same bytes;
-- strings in printable ASCII only, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). `lua_string` in `tools/make_disk.py` does this.
+- strings in printable ASCII only, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). `lua_string` in `tools/make_apps.py` does this.
 
 A writer MUST refuse to build an image containing a path that breaks the rules in [Paths](#paths).
 

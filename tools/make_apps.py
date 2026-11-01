@@ -1,58 +1,106 @@
 #!/usr/bin/env python3
-"""Pack each app in apps/ into a .zapp file that the zOS App Manager installs.
+"""Pack each app in apps/ into a .za file that the zOS App Manager installs.
 
 An app's source is a folder, apps/<id>/, holding:
 
-    app.manifest    { name = "Notes", description = "...", version = "1.0", priority = 10, minZos = "2.1" }
+    app.manifest    { name = "Notes", description = "...", version = "1.0", priority = 10, minZos = "1.0" }
     main.lua        the program the desktop runs
     service.lua     optional: started at boot to run in the background
     ...             any other files the app needs (modules, data)
 
-Each one becomes dist/apps/<id>.zapp, a single serialised Lua table holding every file:
+Each one becomes dist/apps/<id>.za, as described in specs/formats/ZA_FORMAT.md:
 
-    { format = "zos-app", formatVersion = 1, id = "<id>", files = { ["main.lua"] = "...", ... } }
+    { ["za:metadata"] = { version = 1, id = "<id>" }, ["main.lua"] = "...", ... }
 
 To get them into the game:
 
-    python3 tools/make_apps.py                  # writes dist/apps/<id>.zapp for every app
+    python3 tools/make_apps.py                  # writes dist/apps/<id>.za for every app
     python3 tools/make_apps.py notes calc       # or only these
-    python3 tools/make_apps.py --disk           # also dist/zos-apps-disk.lua, which writes them onto a floppy
-    python3 tools/make_apps.py --upload         # also uploads each .zapp to Pastebin (needs PASTEBIN_DEV_KEY)
+    python3 tools/make_apps.py --upload         # also uploads each .za to Pastebin (needs PASTEBIN_DEV_KEY)
 
-Then use App Manager's "Install from disk" with that floppy, or "Install from URL or Pastebin"
-with a paste code.
+Then copy a .za onto a floppy for App Manager's "Install from disk", or use "Install from URL or
+Pastebin" with a paste code.
 
-Lua files are minified (see minify_lua.py) unless you pass --no-minify.
+Lua files and manifests are minified (see minify_lua.py) unless you pass --no-minify.
 """
 
 import argparse
-import datetime
 import os
 import re
 import sys
+import urllib.parse
+import urllib.request
 
-from make_disk import PASTEBIN_LIMIT, ROOT, build, collect_files, lua_string, read_version, upload, usage_lines
 from minify_lua import minify_files
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APPS = os.path.join(ROOT, "apps")
 DEFAULT_OUT_DIR = os.path.join(ROOT, "dist", "apps")
-DISK_OUT = os.path.join(ROOT, "dist", "zos-apps-disk.lua")
 
 FORMAT_VERSION = 1
 ID_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
+MAX_PATH = 128
 MIN_ZOS = re.compile(r"^\d[\d.]*$")
-# Must match validPath in disk/payload/zos/lib/apps.lua.
+# Must match validPath in src/.zos/lib/apps.lua.
 PATH_PART = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
-
-DISK_FINISH = r"""
-print("App disk ready" .. (DRIVE and (" and labelled \"" .. LABEL .. "\"") or "") .. ".")
-print("Put it in a drive next to a zOS computer and open")
-print("App Manager > Install from disk.")
-"""
-
 
 class ManifestError(Exception):
     pass
+
+
+def read_version():
+    with open(os.path.join(ROOT, "src", ".zos", "lib", "system.lua"), encoding="ascii") as f:
+        for line in f:
+            if line.strip().startswith("VERSION = "):
+                return line.split('"')[1]
+    return "?"
+
+
+def collect_files(root):
+    """Every file under root, as (posix path relative to root, bytes), sorted by path."""
+    files = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for name in filenames:
+            if name.startswith("."):
+                continue
+            full = os.path.join(dirpath, name)
+            with open(full, "rb") as f:
+                files.append((os.path.relpath(full, root).replace(os.sep, "/"), f.read()))
+    files.sort()
+    return files
+
+
+def lua_string(data):
+    """A double-quoted Lua string for these bytes, in printable ASCII only."""
+    out = ['"']
+    for byte in data:
+        char = chr(byte)
+        if char in '"\\':
+            out.append("\\" + char)
+        elif 0x20 <= byte <= 0x7E:
+            out.append(char)
+        else:
+            out.append("\\%03d" % byte)  # always 3 digits, so a following digit isn't absorbed
+    out.append('"')
+    return "".join(out)
+
+
+def upload(text, name, dev_key, public):
+    """Upload to Pastebin and return the paste's code."""
+    body = urllib.parse.urlencode({
+        "api_dev_key": dev_key,
+        "api_option": "paste",
+        "api_paste_code": text,
+        "api_paste_name": name,
+        "api_paste_format": "lua",
+        "api_paste_private": "0" if public else "1",  # 1 = unlisted
+    }).encode()
+    with urllib.request.urlopen("https://pastebin.com/api/api_post.php", body, timeout=60) as resp:
+        result = resp.read().decode().strip()
+    if not result.startswith("http"):
+        sys.exit(f"Pastebin upload failed: {result}")
+    return result.rsplit("/", 1)[-1]
 
 
 def parse_lua_value(text):
@@ -207,19 +255,19 @@ def find_apps():
 
 
 def pack(app, minify=True):
-    """Read and check the app at app["path"]. Returns (manifest, files, .zapp text) or exits.
+    """Read and check the app at app["path"]. Returns (manifest, files, .za text) or exits.
 
-    With minify, the .zapp holds minified Lua files."""
+    With minify, the .za holds minified files."""
     def fail(message):
         sys.exit(f"apps/{app['id']}: {message}")
 
-    if not ID_PATTERN.match(app["id"]):
+    if not ID_PATTERN.match(app["id"]) or app["id"] == "zos":
         fail("folder name must be 1-32 lowercase letters, digits, - or _ (it becomes the app id)")
 
     files = collect_files(app["path"])
     names = {path for path, _ in files}
     for path in names:
-        if not all(PATH_PART.match(part) for part in path.split("/")):
+        if len(path.encode()) > MAX_PATH or not all(PATH_PART.match(part) for part in path.split("/")):
             fail(f"bad file name '{path}' (use letters, digits, ., - and _)")
     if "main.lua" not in names:
         fail("has no main.lua")
@@ -236,35 +284,17 @@ def pack(app, minify=True):
 
     packed = minify_files(files) if minify else files
 
-    out = [
-        "{",
-        '  format = "zos-app",',
-        f"  formatVersion = {FORMAT_VERSION},",
-        f"  id = {lua_string(app['id'].encode())},",
-        "  files = {",
-    ]
-    for path, data in packed:
-        out.append(f"    [{lua_string(path.encode())}] = {lua_string(data)},")
-    out += ["  },", "}"]
+    out = ["{", f'  ["za:metadata"] = {{ version = {FORMAT_VERSION}, id = {lua_string(app["id"].encode())} }},']
+    out += [f"  [{lua_string(path.encode())}] = {lua_string(data)}," for path, data in packed]
+    out.append("}")
     return manifest, files, "\n".join(out) + "\n"
-
-
-def build_disk(packages):
-    today = datetime.date.today().isoformat()
-    header = [
-        f"zOS app disk writer. Generated by tools/make_apps.py on {today}.",
-        "Writes these apps onto a floppy, which App Manager installs them from:",
-    ] + [f"  {m['name']} {m['version']}" for _, m, _ in packages] + [""] + usage_lines("zos-apps-disk")
-    files = [(f"{app['id']}.zapp", text.encode()) for app, _, text in packages]
-    return build(files, title="zOS app disk writer", label="zOS Apps", header=header, finish=DISK_FINISH)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("apps", nargs="*", metavar="app", help="ids of the apps to pack (default: all)")
-    parser.add_argument("-o", "--output-dir", default=DEFAULT_OUT_DIR, help="where to write the .zapp files (default: dist/apps/)")
-    parser.add_argument("--disk", action="store_true", help="also write dist/zos-apps-disk.lua, which writes the apps onto a floppy")
-    parser.add_argument("--upload", action="store_true", help="also upload each .zapp to Pastebin (needs PASTEBIN_DEV_KEY)")
+    parser.add_argument("-o", "--output-dir", default=DEFAULT_OUT_DIR, help="where to write the .za files (default: dist/apps/)")
+    parser.add_argument("--upload", action="store_true", help="also upload each .za to Pastebin (needs PASTEBIN_DEV_KEY)")
     parser.add_argument("--public", action="store_true", help="with --upload: make the pastes public instead of unlisted")
     parser.add_argument("--no-minify", action="store_true", help="keep the Lua files' comments and indentation")
     args = parser.parse_args()
@@ -284,11 +314,9 @@ def main():
         sys.exit("Set PASTEBIN_DEV_KEY to your Pastebin API key (https://pastebin.com/doc_api).")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    packages = []
     for app in apps:
         manifest, files, text = pack(app, not args.no_minify)
-        packages.append((app, manifest, text))
-        out = os.path.join(args.output_dir, f"{app['id']}.zapp")
+        out = os.path.join(args.output_dir, f"{app['id']}.za")
         with open(out, "w", encoding="ascii", newline="\n") as f:
             f.write(text)
         service = ", with a service" if any(path == "service.lua" for path, _ in files) else ""
@@ -297,15 +325,6 @@ def main():
         if args.upload:
             code = upload(text, f"zOS app: {manifest['name']} {manifest['version']}", dev_key, args.public)
             print(f"  Uploaded to https://pastebin.com/{code}  (App Manager > Install from URL or Pastebin: {code})")
-
-    if args.disk:
-        text = build_disk(packages)
-        os.makedirs(os.path.dirname(DISK_OUT), exist_ok=True)
-        with open(DISK_OUT, "w", encoding="ascii", newline="\n") as f:
-            f.write(text)
-        print(f"Wrote {os.path.relpath(DISK_OUT)}: {len(packages)} apps, {len(text) / 1024:.0f} KB program")
-        if len(text) > PASTEBIN_LIMIT:
-            print(f"  Warning: that's over Pastebin's {PASTEBIN_LIMIT // 1024} KB limit for free accounts.")
 
 
 if __name__ == "__main__":

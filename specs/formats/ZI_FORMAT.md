@@ -69,7 +69,7 @@ File modes, labels and timestamps are not stored either.
 Writers SHOULD write:
 
 - `zi:metadata` first, then the entries sorted by path, one per line, so that the same input always gives the same bytes;
-- strings in printable ASCII only, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). `lua_string` in `tools/make_disk.py` does this. Three digits are required so a following digit isn't read as part of the escape.
+- strings in printable ASCII only, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). `lua_string` in `tools/make_apps.py` does this. Three digits are required so a following digit isn't read as part of the escape.
 
 Printable ASCII lets a .zi file survive Pastebin's line-ending conversion unchanged. `textutils.serialize` also produces a valid image, but it doesn't sort its keys and it leaves bytes above 127 unescaped.
 
@@ -135,7 +135,7 @@ An image describes the files it contains, not the whole file system:
 - A file that isn't in the image is left alone. A caller that wants a clean system has to erase the old files first.
 - If a folder exists where the image has a file, or a file exists where the image needs a folder, the reader MUST stop before writing anything.
 
-Each file SHOULD be read back after writing to catch a full disk, as the setup disk writer does.
+Each file SHOULD be read back after writing to catch a full disk, as `install.lua` does.
 
 Applying an image can't be undone and isn't atomic. A computer that shuts down partway through may be left with a mix of old and new files, so the caller SHOULD write to a staging folder first where it can, as `lib/update.lua` does. Writing `/startup.lua` last reduces the time in which the computer can't boot.
 

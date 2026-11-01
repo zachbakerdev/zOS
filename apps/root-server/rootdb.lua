@@ -9,20 +9,12 @@ local util = require("util")
 local db = {}
 
 local DIR = "/etc/root-server"
-local OLD_DIR = "/etc/zos/root-server" -- where zOS 2 kept this
 local KEY = fs.combine(DIR, "key")
 local CONFIG = fs.combine(DIR, "config")
 local REQUESTS = fs.combine(DIR, "requests")
 
 local DAY = 24 * 3600 * 1000
 local MAX_PENDING = 32
-
--- Bring over what an older version saved. The app and its service both get here, and nothing
--- here yields, so only the first one moves it.
-if fs.exists(OLD_DIR) and not fs.exists(DIR) then
-    fs.makeDir("/etc")
-    fs.move(OLD_DIR, DIR)
-end
 
 db.DEFAULT_DAYS = 30
 
@@ -121,14 +113,6 @@ function db.setTld(tld)
     return true
 end
 
--- Roots set up before top-level domains existed get one from their name. Any dotted names they've
--- already signed keep working until they expire.
-function db.ensureZone()
-    if db.config().zone then return end
-    local seed, public = db.keypair()
-    db.setConfig({ zone = trust.signZone(seed, public, trust.tldFromName(db.config().name)) })
-end
-
 -- Hostnames have to be in this server's own top-level domain.
 local function hostnameRefused(name)
     if not isHostname(name) then return nil end
@@ -203,12 +187,9 @@ function db.handle(name, key, from)
     local taken = conflict(name, from, key)
     if taken then return { status = "error", message = taken } end
 
+    local refused = hostnameRefused(name)
+    if refused then return { status = "error", message = refused } end
     local entry = db.requests()[key]
-    -- A certificate from before this rule can still be renewed.
-    if not (entry and entry.status == "issued" and entry.name == name) then
-        local refused = hostnameRefused(name)
-        if refused then return { status = "error", message = refused } end
-    end
     if entry and (entry.status == "denied" or entry.status == "revoked") then
         return { status = "denied" }
     end

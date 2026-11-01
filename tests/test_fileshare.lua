@@ -433,20 +433,6 @@ end
 
 reset()
 
--- Data from older versions --------------------------------------------------------
-
-do
-  local c = sim.computer(70)
-  c.files["etc/zos/fileshare/peers"] = "peers"
-  c.files["etc/zos/fileshare/files"] = "files"
-  c.appDir = "apps/fileshare/"
-  c.env.require("share")
-  check("trusted computers moved", c.files["etc/fileshare/peers"], "peers")
-  check("shared files moved", c.files["etc/fileshare/files"], "files")
-  check("nothing left in /etc/zos", c.files["etc/zos/fileshare/peers"], nil)
-end
-reset()
-
 if failed > 0 then
   print("fileshare: " .. failed .. " failed, " .. passed .. " passed")
   os.exit(1)

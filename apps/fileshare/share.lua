@@ -34,7 +34,6 @@ share.CHUNK = 8192 -- sealing doubles this, and net.lua takes 32 KB
 
 local PROTOCOL = "zos-share-1"
 local DIR = "/etc/fileshare"
-local OLD_DIR = "/etc/zos/fileshare" -- where zOS 2 kept this
 local PEERS = fs.combine(DIR, "peers")
 local FILES = fs.combine(DIR, "files")
 
@@ -46,13 +45,6 @@ local CALL_TIMEOUT = 15
 local TRIES = 3
 -- Top-level folders holding password hashes and private keys, or nothing worth sharing.
 local PRIVATE = { etc = true, [".zos"] = true, rom = true, ["startup.lua"] = true }
-
--- Bring over what an older version saved. The app and its service both get here, and nothing
--- here yields, so only the first one moves it.
-if fs.exists(OLD_DIR) and not fs.exists(DIR) then
-    fs.makeDir("/etc")
-    fs.move(OLD_DIR, DIR)
-end
 
 local function now()
     return os.epoch("utc")

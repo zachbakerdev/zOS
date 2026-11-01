@@ -81,7 +81,7 @@ Returns whether `path` can be a file in an app: relative, at most 128 bytes, and
 
 ### Manifests
 
-`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` and `version` are required text. `description` and `author` MUST be text, `priority` MUST be a number, and `minZos` MUST be a version like `"2.1"`.
+`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` and `version` are required text. `description` and `author` MUST be text, `priority` MUST be a number, and `minZos` MUST be a version like `"1.0"`.
 
 ### Constants
 
@@ -150,7 +150,7 @@ Stops the app's service and deletes its folder. It fails if the app isn't instal
 
 ### apps.PROTECTED
 
-The built-in apps, which can be upgraded but not removed: `appman`, `terminal` and `files`.
+The built-in apps, which can be upgraded but not removed. They come from `require("builtin")`, the list in `src/.zos/lib/builtin.lua`: `appman`, `terminal` and `files`.
 
 ## Running apps
 

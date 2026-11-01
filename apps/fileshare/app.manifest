@@ -1,7 +1,7 @@
 {
     name = "File Share",
     description = "Share files directly with computers you've verified",
-    version = "1.1.0",
+    version = "1.0",
     author = "zOS",
     priority = 60,
 }

@@ -71,7 +71,18 @@ function db.hostname()
 end
 
 function db.setHostname(host, root)
-    db.setConfig({ hostname = host, root = root })
+    db.setConfig({ hostname = host, root = root, pendingHost = false, pendingRoot = false })
+end
+
+-- The hostname asked for and the key of the root asked, until there's an answer.
+function db.pendingHostname()
+    local config = db.config()
+    if config.pendingHost then return config.pendingHost, config.pendingRoot end
+end
+
+-- With no arguments, forgets the request.
+function db.setPendingHostname(host, root)
+    db.setConfig({ pendingHost = host or false, pendingRoot = root or false })
 end
 
 ------------------------------------------------------------------------------

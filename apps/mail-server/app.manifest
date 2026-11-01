@@ -1,7 +1,7 @@
 {
     name = "Mail Server",
     description = "Host mailboxes under a hostname from a root server",
-    version = "1.0.2",
+    version = "1.0.3",
     author = "zOS",
     minZos = "1.2.0",
     admin = true,

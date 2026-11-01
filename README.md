@@ -347,7 +347,9 @@ through it from any other computer. An address is `account@hostname`, like
 1. **Trust a root server** on the mail server, in **Settings → Security → Root servers**. See
    [Root servers](#root-servers).
 2. **Get a hostname.** Open Mail Server, which asks for a name and adds the root's top-level domain.
-   The root server's admin compares fingerprints and approves it under **Requests**.
+   The root server's admin compares fingerprints and approves it under **Requests**. Press **Q** to
+   come back later, which you'll need if the root server is on this computer. The request is
+   remembered, and opening Mail Server again carries on waiting. **C** asks for another name instead.
 3. **Make accounts.** Add them under **Accounts**, or leave **New accounts** open so that people
    can use **Create an account** in Mail.
 4. **Sign in.** On another computer that trusts the same root server, install Mail and sign in with

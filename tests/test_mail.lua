@@ -801,6 +801,7 @@ do
   check("refuses a bad name", screenHas(server, "Hostnames look like"))
   line(server, "zmail")
   check("waits for approval", screenHas(server, "Waiting for the root server"))
+  sim.run(function() return root.db.requests()[keyOf(server)] end)
   check("the request reached the root", root.db.requests()[keyOf(server)].name, "zmail.root-a")
   check("approve", approve(root, server, "zmail.root-a"), true)
   check("got it", screenHas(server, "This server is now zmail.root-a"))
@@ -861,6 +862,53 @@ do
   check("reply sent", screenHas(c, "Sent."))
   sim.run(function() return #server.db.index("alice") == 2 end, 60)
   check("quotes the original", has(bodyOf(server, "alice", server.db.index("alice")[1].id), "> Buy diamonds"))
+
+  -- With the root server on this computer, the admin has to leave to approve the request.
+  local both = rootServer(12, "Root C", "root-c")
+  both.appDir = "apps/mail-server/"
+  local mailDb = both.env.require("maildb")
+  local admin = { user = "admin", admin = true }
+  trustRoot(both, both)
+  local first = run(both, "apps/mail-server/main.lua", admin)
+  check("explains on the same computer", screenHas(both, "needs a hostname"))
+  key(both, "enter")
+  check("asks for a name here", screenHas(both, "Name, without .root-c"))
+  line(both, "zmail")
+  check("says how to leave", screenHas(both, "Q: come back later"))
+  char(both, "q") -- while the first request is still going
+  sim.run(function() return first.done end, 5)
+  check("leaves at once", first.done)
+  check("remembers the name", (mailDb.pendingHostname()), "zmail.root-c")
+  sim.run(function() return both.db.requests()[keyOf(both)] end)
+
+  local unanswered = run(both, "apps/mail-server/main.lua", admin)
+  check("carries on waiting", screenHas(both, "Asking Root C for zmail.root-c."))
+  key(both, "backspace")
+  sim.run(function() return unanswered.done end, 5)
+  check("backspace leaves too", unanswered.done)
+
+  check("approve on the same computer", approve(both, both, "zmail.root-c"))
+  run(both, "apps/mail-server/main.lua", admin)
+  check("picks up the answer", screenHas(both, "This server is now zmail.root-c"))
+  key(both, "enter")
+  check("menu after coming back", screenHas(both, "Hostname: zmail.root-c"))
+  check("request forgotten", (mailDb.pendingHostname()), nil)
+
+  -- A name that can't be had doesn't trap a request
+  local late = sim.computer(13)
+  late.appDir = "apps/mail-server/"
+  trustRoot(late, both)
+  run(late, "apps/mail-server/main.lua", admin)
+  key(late, "enter")
+  check("asks for a name again", screenHas(late, "Name, without .root-c"))
+  line(late, "zmail")
+  check("shows why", screenHas(late, "already has the name"))
+  char(late, "c")
+  check("C asks for another name", screenHas(late, "Name, without .root-c"))
+  line(late, "other")
+  check("waits for the new name", screenHas(late, "Asking Root C for other.root-c."))
+  sim.run(function() return both.db.requests()[keyOf(late)] end)
+  check("the new name went in", both.db.requests()[keyOf(late)].name, "other.root-c")
 end
 reset()
 

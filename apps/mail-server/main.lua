@@ -23,37 +23,80 @@ end
 -- Hostname
 ------------------------------------------------------------------------------
 
--- Polls until the root server's admin has answered. Returns true once it's installed. Backspace
--- leaves the request with them, and asking again later picks up the answer.
+local acquireHostname
+
+-- Runs `task` until it ends or the admin presses a key this screen uses, and returns what they
+-- asked for, if anything. It has to watch while asking the root server too, which takes a while.
+local function unlessPressed(task)
+    local pressed
+    parallel.waitForAny(task, function()
+        repeat
+            local e, a = os.pullEventRaw()
+            if (e == "key" and a == keys.backspace) or (e == "char" and a:lower() == "q") then
+                pressed = "leave"
+            elseif e == "char" and a:lower() == "c" then
+                pressed = "change"
+            end
+        until pressed
+    end)
+    return pressed
+end
+
+local function pause(seconds)
+    local timer = os.startTimer(seconds)
+    repeat
+        local _, id = os.pullEventRaw("timer")
+    until id == timer
+end
+
+local function drawWaiting(root, host, why)
+    ui.screen(TITLE .. " - Hostname")
+    ui.text("Asking " .. root.name .. " for " .. host .. ".")
+    ui.text("")
+    ui.text("Your fingerprint:", ui.theme.dim)
+    ui.text(crypto.fingerprint(select(2, trust.identity())), ui.theme.accent)
+    ui.text("")
+    ui.text("Waiting for the root server's administrator to approve it under Requests. They " ..
+        "should compare this fingerprint with the one on their screen.", ui.theme.dim)
+    ui.text("")
+    ui.text("Q: come back later   C: choose another name", ui.theme.dim)
+    if why then ui.text(why, ui.theme.bad) end
+end
+
+-- Polls until the root server's admin has answered. Returns true once it's installed. The request
+-- is remembered, so leaving is safe, which matters when the root server is this computer: its
+-- admin can't get to Requests from here. Opening the app again carries on waiting. An error might
+-- not last, and C gets away from one that does, so it doesn't end the wait.
 local function waitForHostname(root, host)
+    db.setPendingHostname(host, root.key)
+    drawWaiting(root, host)
     while true do
-        ui.screen(TITLE .. " - Hostname")
-        ui.text("Asking " .. root.name .. " for " .. host .. ".")
-        ui.text("")
-        ui.text("Your fingerprint:", ui.theme.dim)
-        ui.text(crypto.fingerprint(select(2, trust.identity())), ui.theme.accent)
-        ui.text("")
-        local status, err = net.requestCertificate(root, host)
+        local status, err
+        local pressed = unlessPressed(function() status, err = net.requestCertificate(root, host) end)
         if status == "issued" then
             db.setHostname(host, root.key)
             system.log(session.user .. " got the hostname " .. host .. " from " .. root.name)
             ui.message(TITLE, "This server is now " .. host .. ".", ui.theme.good)
             return true
         elseif status == "denied" then
+            db.setPendingHostname()
             return fail(root.name .. " refused the request.")
-        elseif not status then
-            return fail("Couldn't get the hostname:\n\n" .. tostring(err))
         end
 
-        ui.text("Waiting for the root server's administrator to approve it under Requests. They " ..
-            "should compare this fingerprint with the one on their screen. Backspace stops waiting.", ui.theme.dim)
-        local timer = os.startTimer(5)
-        while true do
-            local e, a = os.pullEventRaw()
-            if e == "timer" and a == timer then break end
-            if e == "key" and a == keys.backspace then return end
+        if not pressed then
+            drawWaiting(root, host, err and tostring(err))
+            pressed = unlessPressed(function() pause(5) end)
         end
+        if pressed == "change" then return acquireHostname() end
+        if pressed then return end
     end
+end
+
+-- The request this server is still waiting on, as a root and a hostname, if that root is trusted.
+local function pendingRequest()
+    local host, key = db.pendingHostname()
+    local root = key and trust.root(key)
+    if root then return root, host end
 end
 
 local function chooseRoot()
@@ -70,7 +113,7 @@ local function chooseRoot()
     return selected and roots[selected]
 end
 
-local function acquireHostname()
+function acquireHostname()
     local root = chooseRoot()
     if not root then return end
     ui.screen(TITLE)
@@ -178,6 +221,13 @@ local function accounts()
     end
 end
 
+local function hostnameAction()
+    local root, host = pendingRequest()
+    if root then return waitForHostname(root, host) end
+    if db.hostname() then return hostnameDetails() end
+    acquireHostname()
+end
+
 local function queue()
     local lines = {}
     for _, entry in ipairs(db.outbox()) do
@@ -192,8 +242,13 @@ if not session.admin then
 end
 
 if not db.hostname() then
-    ui.message(TITLE, "This server needs a hostname from a root server before it can take mail.")
-    acquireHostname()
+    local root, host = pendingRequest()
+    if root then
+        waitForHostname(root, host)
+    else
+        ui.message(TITLE, "This server needs a hostname from a root server before it can take mail.")
+        acquireHostname()
+    end
     if not db.hostname() then return end
 end
 
@@ -202,9 +257,11 @@ while true do
     local host, cert = db.hostname()
     local config = db.config()
     local waiting = #db.outbox()
+    local _, asked = pendingRequest()
     local items = {
-        { label = "Hostname: " .. (host or "none"), action = host and hostnameDetails or acquireHostname,
-          hint = cert and (daysLeft(cert) .. " days left on its certificate") or "Get one from a root server",
+        { label = "Hostname: " .. (host or "none"), action = hostnameAction,
+          hint = asked and ("Waiting for approval of " .. asked)
+              or cert and (daysLeft(cert) .. " days left on its certificate") or "Get one from a root server",
           fg = not host and ui.theme.bad or nil },
         { label = "Accounts (" .. #db.accounts() .. ")", action = accounts, hint = "Add, reset and delete" },
         { label = "New accounts: " .. (config.signups and "open" or "admins only"),

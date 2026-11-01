@@ -121,8 +121,6 @@ do
   nope, why = send(a, 99, 5000, "x")
   check("unknown computer", nope, nil)
   check("bad port", (a.net.listen(70000)), nil)
-  nope, why = send(a, 1, 5000, "x")
-  check("sending to yourself fails at once", has(tostring(why), "own computer"))
   nope, why = send(a, 2, 5000, function() end)
   check("function payload", nope, nil)
   check("function payload says why", has(tostring(why), "function"))
@@ -943,6 +941,144 @@ do
   check("revoked can't renew", sim.call(a, function() return a.net.requestCertificate(entry, "alpha") end), "denied")
   trustOf(b).addRoot(entry.key, entry.name, entry.host)
   check("revoked name is free", sim.call(b, function() return b.net.requestCertificate(entry, "alpha") end), "pending")
+end
+
+-- A computer talking to itself ------------------------------------------------
+
+reset()
+do
+  local a = sim.computer(1, { modems = {} }) -- none of this needs a modem
+  local serving = {}
+  a.net.listen(5000)
+  a.net.listen(6000, { modem = "back" }) -- no modem is involved, so this can't keep it out
+  sim.spawn(a, function()
+    while true do
+      local msg = a.net.receive(5000)
+      serving[#serving + 1] = msg
+      if type(msg.payload) == "table" and msg.payload.ask then
+        msg.payload.ask = "changed by the receiver"
+        a.net.reply(msg, { echo = msg.payload.n })
+      end
+    end
+  end)
+
+  check("send to self", send(a, 1, 5000, "hello me"), true)
+  sim.advance(1)
+  local msg = serving[1]
+  check("self message arrives", msg and msg.payload, "hello me")
+  check("from self", msg.from, 1)
+  check("port", msg.port, 5000)
+  check("no modem side", msg.side, nil)
+  check("peer is this computer", msg.peer.key, cryptoOf(a).toHex(select(2, trustOf(a).identity())))
+  check("not verified without a certificate", msg.peer.verified, false)
+
+  local ask = { ask = "question", n = 7 }
+  local reply, err = sim.call(a, function() return a.net.request(1, 5000, ask) end)
+  check("request to self", reply and reply.payload.echo, 7)
+  check("no error", err, nil)
+  check("reply is from self", reply.from, 1)
+  check("payload was copied", ask.ask, "question")
+  check("reply keeps the port", reply.port, 5000)
+
+  local ok, why = send(a, 1, 5001, "x")
+  check("closed port on self", ok, nil)
+  check("closed port says why", has(tostring(why), "closed"))
+  ok, why = send(a, 1, 30001, "x")
+  check("own home channel stays closed", ok, nil)
+  ok, why = send(a, 1, 5000, function() end)
+  check("self payloads are checked", ok, nil)
+  ok, why = send(a, 1, 5000, string.rep("x", 40000))
+  check("self payloads have the same limit", has(tostring(why), "too big"))
+  check("modem option doesn't apply", send(a, 1, 6000, "x"), true)
+
+  -- nobody answers: the time limit still applies, and a late reply finds nothing waiting
+  local late = sim.call(a, function() return a.net.receive(6000, 1) end)
+  check("message to the modem-limited port", late and late.payload, "x")
+  sim.spawn(a, function() a.net.request(1, 6000, "ignored", { timeout = 1 }) end)
+  local ignored = sim.call(a, function() return a.net.receive(6000, 1) end)
+  local none
+  none, why = sim.call(a, function() return a.net.request(1, 6000, "again", { timeout = 1 }) end)
+  check("no reply from self", none, nil)
+  check("no reply says why", has(tostring(why), "didn't reply"))
+  sim.advance(2)
+  local nope = sim.call(a, function() return a.net.reply(ignored, "too late") end)
+  check("a late reply fails", nope, nil)
+
+  ok, why = send(a, 1, 5000, "x", { key = string.rep("ab", 32) })
+  check("key is checked on self", has(tostring(why), "different key"))
+  ok, why = send(a, 1, 5000, "x", { verified = true })
+  check("verified is checked on self", has(tostring(why), "no certificate"))
+  ok, why = send(a, 1, 5000, "x", { expect = "someone" })
+  check("expect is checked on self", has(tostring(why), "not 'someone'"))
+  a.net.listen(5002, { verified = true })
+  ok, why = send(a, 1, 5002, "x")
+  check("verified port refuses an uncertified self", has(tostring(why), "only accepts verified"))
+end
+
+-- Packets claiming to be from this computer can't pass as its own messages.
+reset()
+do
+  local a = sim.computer(1)
+  a.net.listen(5000)
+  local box = sim.inbox(a)
+  local probes = {}
+  sim.spawn(a, function()
+    while true do probes[#probes + 1] = select(2, a.env.os.pullEventRaw("net_probe")) end
+  end)
+  sim.deliver({ from = 66, channel = 5000, reply = 0, message = { zn = 1, src = 1, dst = 1, t = "probe", nonce = "x" } })
+  sim.deliver({ from = 66, channel = 5000, reply = 0, message = { zn = 1, src = 1, dst = 1, t = "data", sid = "x", seq = 1 } })
+  sim.advance(1)
+  check("forged self packets are dropped", #box + #probes, 0)
+end
+
+-- Broadcasts reach this computer as well as the others.
+reset()
+do
+  local a, b = sim.computer(1), sim.computer(2)
+  local function answers(c)
+    c.net.listen(5000)
+    sim.spawn(c, function()
+      while true do
+        local _, probe = c.env.os.pullEventRaw("net_probe")
+        c.net.answerProbe(probe, { name = "computer " .. c.id, port = probe.port })
+      end
+    end)
+  end
+  answers(a)
+  answers(b)
+  local got = sim.call(a, function() return a.net.probe(5000, 1) end)
+  local from = {}
+  for _, answer in ipairs(got) do from[answer.from] = answer.data.name end
+  check("two answers", #got, 2)
+  check("its own answer", from[1], "computer 1")
+  check("the other's answer", from[2], "computer 2")
+  check("a port nobody listens on", #sim.call(a, function() return a.net.probe(5001, 1) end), 0)
+end
+
+-- A root server on the computer it serves.
+reset()
+do
+  local root = rootServer(10, "Home Root")
+  local found = sim.call(root, function() return root.net.findRoots(2) end)
+  check("finds its own root", #found, 1)
+  check("its host is this computer", found[1].host, 10)
+  check("trusts its own root", sim.call(root, function() return root.net.addRoot(found[1]) end))
+  local entry = certify(root, root, "home.home-root")
+  local result = sim.call(root, function() return root.net.resolve("home.home-root") end)
+  check("resolves its own hostname", result and result.id, 10)
+
+  root.net.listen(5000, { verified = true })
+  sim.spawn(root, function()
+    while true do
+      local msg = root.net.receive(5000)
+      root.net.reply(msg, { isHost = root.net.isHost(msg.peer, "home.home-root") })
+    end
+  end)
+  local reply = sim.call(root, function() return root.net.requestHost("home.home-root", 5000, {}, { timeout = 10 }) end)
+  check("reaches its own hostname on a verified port", reply and reply.payload.isHost, true)
+  check("and the peer is verified", reply and reply.peer.name, "home.home-root")
+  check("another computer still gets a refusal", (send(sim.computer(1), 10, 5000, "x")), nil)
+  check("entry", entry.host, 10)
 end
 
 -- A busy worker doesn't lose packets ------------------------------------------

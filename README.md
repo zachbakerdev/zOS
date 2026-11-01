@@ -256,7 +256,7 @@ local reply, err = net.request(12, 5000, "ping", { timeout = 5 })
 | `payload`   | what was sent: anything except functions, up to 32 KB |
 | `port`      | the port it arrived on |
 | `from`      | the sender's computer id, for replying. Use `peer` to decide whether to believe it |
-| `side`      | the modem it arrived on |
+| `side`      | the modem it arrived on, or nil if it came from this computer |
 | `peer`      | `{ id, key, fingerprint, verified, name, root, names }`. `name` is only set if `verified`, and `names` has every name it holds, by root key |
 
 A port is the modem channel. Each computer also keeps one channel open for itself
@@ -334,7 +334,9 @@ signs the same name. If two trusted roots claim one top-level domain, lookups in
 A hostname is taken like any certificate: a computer holds one per root, so a computer already
 certified under another name has to have that entry revoked and forgotten in the Root Server app
 first. To reach a hostname, a computer has to trust its root server, and the root server has to be
-in range. A computer can't reach its own hostname, because modems can't send to their own computer.
+in range. A root server on the same computer counts: apps on one computer reach each other with the
+same calls, including `net.probe`, without using a modem, so a mail server and a root server can share
+a computer. Trust the root in **Settings** as usual.
 
 ### Mail
 

@@ -864,6 +864,61 @@ do
 end
 reset()
 
+-- A mail server and its root server on one computer, with both services as they ship.
+do
+  local both = rootServer(20, "Root A", "root-a")
+  local rootDb = both.db
+  local entry = hostname(both, both, "zmail.root-a")
+  check("its own root is its own computer", entry.host, 20)
+  both.appDir = "apps/mail-server/"
+  both.db = both.env.require("maildb")
+  both.db.setHostname("zmail.root-a", entry.key)
+  check("the server has its hostname", both.db.hostname(), "zmail.root-a")
+  run(both, "apps/mail-server/service.lua")
+  sim.advance(1)
+  account(both, "alice")
+  account(both, "carol")
+
+  -- a server on another computer, which uses the same root
+  local away = sim.computer(21)
+  away.appDir = "apps/mail-server/"
+  away.db = away.env.require("maildb")
+  local awayEntry = trustRoot(away, both)
+  sim.call(away, function() return away.net.requestCertificate(awayEntry, "other.root-a") end)
+  both.db, rootDb = rootDb, both.db
+  check("approve the other server", approve(both, away, "other.root-a"), true)
+  both.db, rootDb = rootDb, both.db
+  check("issued to the other server",
+    sim.call(away, function() return away.net.requestCertificate(awayEntry, "other.root-a") end), "issued")
+  away.db.setHostname("other.root-a", awayEntry.key)
+  run(away, "apps/mail-server/service.lua")
+  sim.advance(1)
+  account(away, "bob")
+
+  -- a client on the same computer as both servers
+  both.appDir = "apps/mail/"
+  both.client = both.env.require("mailclient")
+  both.session = { user = "me", secretKey = string.rep("k", 32) }
+  local alice = signIn(both, "alice@zmail.root-a")
+  check("a client signs in on the server's computer", alice ~= nil)
+  check("mail on the same server", send(both, alice, { "carol" }, "Hi", "next door") ~= nil)
+  sim.advance(2)
+  check("delivered on the same server", #inbox(both, "carol"), 1)
+
+  check("mail to another server", send(both, alice, { "bob@other.root-a" }, "Hi", "over there") ~= nil)
+  sim.run(function() return #inbox(away, "bob") == 1 end, 60)
+  check("the other server proved the sender", bodyOf(away, "bob", inbox(away, "bob")[1].id), "over there")
+
+  -- coming back, this computer checks the sender's hostname through its own root
+  local outside = clientComputer(22, { both })
+  local bob = signIn(outside, "bob@other.root-a")
+  check("a client elsewhere signs in", bob ~= nil)
+  check("mail back", send(outside, bob, { "alice@zmail.root-a" }, "Back", "and back") ~= nil)
+  sim.run(function() return #inbox(both, "alice") == 1 end, 60)
+  check("the sender was proven through its own root", bodyOf(both, "alice", inbox(both, "alice")[1].id), "and back")
+end
+reset()
+
 if failed > 0 then
   print("mail: " .. failed .. " failed, " .. passed .. " passed")
   os.exit(1)

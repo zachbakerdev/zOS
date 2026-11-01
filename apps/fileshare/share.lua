@@ -263,11 +263,11 @@ local function displayName(name, id)
     return trust.validName(name) and name or ("computer-" .. id)
 end
 
--- Computers in range, as { id, name }. None of this is proven; share.hello is what shows the key.
+-- Other computers in range, as { id, name }. None of this is proven; share.hello is what shows the key.
 function share.find(timeout)
     local answers, err = net.probe(share.PORT, timeout)
     if not answers then return nil, err end
-    local found, known = {}, {}
+    local found, known = {}, { [os.getComputerID()] = true } -- this computer answers its own probes
     for _, answer in ipairs(answers) do
         if not known[answer.from] then
             known[answer.from] = true

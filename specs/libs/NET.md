@@ -1,6 +1,6 @@
 # zOS Net Library Specification
 
-`require("net")` gives apps encrypted, authenticated messages between computers over modems. There's nothing to set up: every computer has its own key, and the key exchange happens by itself the first time two computers talk. The algorithms it uses are described in [CRYPTO.md](CRYPTO.md), and who a computer believes in [TRUST.md](TRUST.md).
+`require("net")` gives apps encrypted, authenticated messages between computers over modems. There's nothing to set up: every computer has its own key, and the key exchange happens by itself the first time two computers talk. The algorithms it uses are described in [CRYPTO.md](CRYPTO.md), and who a computer believes in [TRUST.md](TRUST.md). A computer can also use all of this to reach itself, as described in [This computer](#this-computer).
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
@@ -42,7 +42,7 @@ A message that decrypts and authenticates goes into its port's inbox and queues 
 | `port`    | The port it arrived on                                                    |
 | `from`    | The sender's computer id, for replying                                    |
 | `id`      | The message id                                                            |
-| `side`    | The modem it arrived on                                                   |
+| `side`    | The modem it arrived on. Nil if it came from this computer                |
 | `peer`    | What's known about the sender                                             |
 
 | `peer` field  | Contents                                                     |
@@ -64,6 +64,20 @@ A payload can be any value except a function, nested up to 16 levels, and up to 
 - A peer that fails `verified`, `expect` or `key` on an existing session gets one new handshake, in case it has a new certificate. The same goes for a port that answers `denied`.
 - A port's inbox holds 32 messages. When it's full, the oldest is dropped.
 - A closed port doesn't answer a handshake, so a send to one fails by timing out. This can take around 15 seconds. On an existing session, it fails straight away.
+
+### This computer
+
+Two apps on one computer talk the same way as two computers, with nothing changed in either. `send`, `request`, `reply`, `probe` and `answerProbe` all work with this computer's own id, so a mail server can use a root server running beside it, and a computer needs no modem to do so.
+
+- These messages stay in memory. They're never encrypted, because they never leave the computer, and they use no session or handshake.
+- `msg.from` is this computer's id, and `msg.peer` is this computer, with its key and its certificates. As with any peer, it's `verified` only with a certificate from a root this computer trusts.
+- The `verified`, `expect`, `root` and `key` options and a port's `verified` option are checked as usual, and the payload is copied and held to the same limits.
+- A closed port fails straight away.
+- A port's `modem` option doesn't apply, because no modem is involved. `msg.side` and a probe's `side` are nil.
+- `net.probe` reaches this computer as well as the others in range, so a computer's own services answer it. An app listing other computers MUST leave out its own id.
+- A computer's id can't be forged to reach this path. Packets from a modem that claim this computer's id are dropped.
+
+Every app on a computer sends as that computer, so a port can't tell one app from another. That's also true of messages it sends to other computers.
 
 ## Methods
 
@@ -114,13 +128,13 @@ These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goe
 | `net.rootForTld(tld)`                          | The trusted root that owns a top-level domain             |
 | `net.tldOf(root)`                              | The top-level domain of a trusted root                    |
 
-`requestHost` refuses to send to anyone but the holder of that hostname, with the key on its certificate, from the root that owns it. `tldOf` remembers the answer, so it only asks a root once. A root that can't be reached stops `rootForTld` finding a domain only if no other root owns it. A computer can't reach its own hostname, because modems can't send to their own computer.
+`requestHost` refuses to send to anyone but the holder of that hostname, with the key on its certificate, from the root that owns it. `tldOf` remembers the answer, so it only asks a root once. A root that can't be reached stops `rootForTld` finding a domain only if no other root owns it. A computer reaches its own hostname and its own root server like any other, as long as it trusts that root.
 
 ### Discovery
 
 | Method                         | Returns                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
-| `net.probe(port, timeout)`     | A list of `{ data, from }`, after `timeout` seconds. Default 3           |
+| `net.probe(port, timeout)`     | A list of `{ data, from }`, after `timeout` seconds, including this computer if it answers. Default 3 |
 | `net.answerProbe(probe, data)` | Nothing. Answers a `net.PROBE_EVENT`, whose value is `{ port, nonce, from, side }` |
 
 Probes are how computers find each other before they know anything about each other, so they aren't encrypted or authenticated. Apps MUST treat what comes back as a claim, and MUST NOT put secrets in an answer. A computer only hears probes on ports it's listening on.
@@ -263,7 +277,7 @@ Split the data into chunks and send them in order with `net.request`, using the 
 
 Apps don't need this section. It's for anyone changing `net`, or checking its design. The protocol is called `zos-net-1`.
 
-Every packet is a table sent through the modem, with `zn` (the version, currently 1), `src` (the sender's computer id) and `t` (the type). Packets other than `probe` and `beacon` also have `dst`, the computer they're for. `src` is a claim until a handshake or tag proves it.
+Every packet is a table sent through the modem, with `zn` (the version, currently 1), `src` (the sender's computer id) and `t` (the type). Packets other than `probe` and `beacon` also have `dst`, the computer they're for. `src` is a claim until a handshake or tag proves it. A receiver MUST drop any packet with its own id in `src`, which is what lets it treat a message from its own id as coming from this computer.
 
 ### Handshake
 

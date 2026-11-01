@@ -4,6 +4,9 @@
 -- handles packets and outgoing jobs. It never waits for the other computer: each step runs to its
 -- end and leaves its state in a table, so two computers that write to each other at the same
 -- moment can't hold each other up.
+--
+-- A computer's own messages and probes never touch a modem, which can't reach its own computer.
+-- They stay in memory, so they need no session, but they go through the same checks as any other.
 
 local crypto = require("crypto")
 local keys = require("keys")
@@ -259,6 +262,13 @@ local function peerOf(session)
     }
 end
 
+-- This computer, as a peer. It needs no handshake to prove it, because `src` can't be this
+-- computer's id on anything that came through a modem: the receiver drops those.
+local function selfPeer()
+    local _, public = trust.identity()
+    return peerOf({ peer = myId, key = public, keyHex = toHex(public), certs = trust.certs() })
+end
+
 -- Whether a peer may use this key. A certificate for the id overrides a pin.
 local function checkPin(id, keyHex, certs)
     local address = "net:" .. id
@@ -312,6 +322,11 @@ end
 
 local function failJob(job, why)
     job.done, job.ok, job.err = true, false, why
+    os.queueEvent(DONE)
+end
+
+local function finishJob(job)
+    job.done, job.ok = true, true
     os.queueEvent(DONE)
 end
 
@@ -460,9 +475,8 @@ local function message(session, body, packet, port)
     }
 end
 
-local function deliver(session, body, packet)
-    local msg = message(session, body, packet, packet.port)
-    local inbox = ports[packet.port].inbox
+local function deliver(msg)
+    local inbox = ports[msg.port].inbox
     if #inbox >= INBOX_SIZE then table.remove(inbox, 1) end
     inbox[#inbox + 1] = msg
     os.queueEvent(net.EVENT, msg)
@@ -488,9 +502,7 @@ local function onData(packet)
         sendAck(session, packet.seq, "ok")
         waiting[body.re] = nil
         job.reply = message(session, body, packet, job.port)
-        job.done, job.ok = true, true
-        os.queueEvent(DONE)
-        return
+        return finishJob(job)
     end
 
     local info = ports[packet.port]
@@ -503,7 +515,7 @@ local function onData(packet)
     local id = session.keyHex .. "|" .. body.id
     if seen[id] then return end
     seen[id] = now()
-    deliver(session, body, packet)
+    deliver(message(session, body, packet, packet.port))
 end
 
 local function onAck(packet)
@@ -553,8 +565,41 @@ local function refusal(job, peer)
     end
 end
 
+-- A message to this computer. The payload is copied, as it would be by a modem, so the two sides
+-- never share a table.
+local function stepLoopback(job)
+    local peer = selfPeer()
+    local why = refusal(job, peer)
+    if why then return failJob(job, why) end
+    local _, payload = decode(encode(job.payload))
+    local msg = { payload = payload, port = job.port, from = myId, id = job.id, peer = peer }
+
+    if job.re ~= nil then
+        local asked = waiting[job.re]
+        if not asked or asked.peer ~= myId then return failJob(job, "That port is closed.") end
+        waiting[job.re] = nil
+        asked.reply = msg
+        finishJob(asked)
+        return finishJob(job)
+    end
+
+    local info = ports[job.port]
+    if not info then return failJob(job, "That port is closed.") end
+    if info.verified and not peer.verified then return failJob(job, "That port only accepts verified computers.") end
+    if job.expectReply then
+        job.state, job.deadline = "reply", now() + job.timeout * 1000
+        waiting[job.id] = job
+        deliver(msg)
+    else
+        deliver(msg)
+        finishJob(job)
+    end
+end
+
 local function stepJob(job)
-    if job.state == "new" then
+    if job.state == "new" and job.peer == myId then
+        stepLoopback(job)
+    elseif job.state == "new" then
         local session = currentFor[job.peer]
         if live(session) then
             local why = refusal(job, peerOf(session))
@@ -596,8 +641,7 @@ local function stepJob(job)
                 job.state, job.deadline = "reply", now() + job.timeout * 1000
                 waiting[job.id] = job
             else
-                job.done, job.ok = true, true
-                os.queueEvent(DONE)
+                finishJob(job)
             end
         elseif job.status == "closed" then
             failJob(job, "That port is closed.")
@@ -695,7 +739,6 @@ local function newJob(id, port, payload, opts)
 end
 
 local function badTarget(id, port)
-    if id == myId then return "A computer can't send to its own computer." end
     if type(id) ~= "number" or not validPort(port) then return "Bad computer id or port." end
 end
 
@@ -769,12 +812,17 @@ function net.probe(port, timeout)
     local probe = { answers = {} }
     probes[nonce] = probe
     transmit(port, { t = "probe", nonce = nonce })
+    if ports[port] then os.queueEvent(net.PROBE_EVENT, { port = port, nonce = nonce, from = myId }) end
     util.wait(timeout or 3)
     probes[nonce] = nil
     return probe.answers
 end
 
 function net.answerProbe(probe, data)
+    if probe.from == myId then
+        local _, copy = decode(encode(data))
+        return onBeacon({ nonce = probe.nonce, data = copy, src = myId })
+    end
     transmit(homeChannel(probe.from), { t = "beacon", nonce = probe.nonce, data = data })
 end
 

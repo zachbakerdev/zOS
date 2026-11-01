@@ -120,7 +120,7 @@ end
 -- The zOS version in the image, which also shows that it's a whole system.
 local function checkComplete(files)
     local system = files[SYSTEM .. "/lib/system.lua"]
-    local version = system and system:match('VERSION%s*=%s*"([^"]+)"')
+    local version = system and system:match('VERSION%s*=%s*"(%d+%.%d+%.%d+)"')
     if not version or not files[SYSTEM .. "/boot.lua"] or not files[STARTUP] then
         fail("The image isn't a complete system.")
     end

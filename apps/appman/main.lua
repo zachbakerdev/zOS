@@ -13,7 +13,7 @@ local function kb(bytes)
     return ("%.1f KB"):format(bytes / 1024)
 end
 
--- How a package compares with what's installed, e.g. "new" or "update from 1.0".
+-- How a package compares with what's installed, e.g. "new" or "update from 1.0.0".
 local function status(pkg)
     local current = apps.get(pkg.id)
     if not current then

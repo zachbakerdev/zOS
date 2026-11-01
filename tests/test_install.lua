@@ -148,7 +148,7 @@ local function imageText(extra)
   local files = {
     ["/startup.lua"] = "-- new startup",
     ["/.zos/boot.lua"] = "-- new boot",
-    ["/.zos/lib/system.lua"] = 'local a={VERSION="1.0",ROOT="/.zos"}return a',
+    ["/.zos/lib/system.lua"] = 'local a={VERSION="1.0.0",ROOT="/.zos"}return a',
     ["/.zos/apps/files/main.lua"] = "-- new files app",
   }
   for k, v in pairs(extra or {}) do files[k] = v or nil end
@@ -245,6 +245,7 @@ refused("cut off", imageText():sub(1, 60), "isn't a .zi image")
 refused("wrong version", (imageText():gsub("version=1", "version=2")), "newer installer")
 refused("no boot", imageText({ ["/.zos/boot.lua"] = false }), "complete system")
 refused("no version", imageText({ ["/.zos/lib/system.lua"] = "-- none" }), "complete system")
+refused("short version", imageText({ ["/.zos/lib/system.lua"] = 'local a={VERSION="1.0"}return a' }), "complete system")
 refused("traversal", imageText({ ["/.zos/../evil"] = "x" }), "bad file name")
 refused("rom", imageText({ ["/rom/evil"] = "x" }), "bad file name")
 refused("disk", imageText({ ["/disk2/evil"] = "x" }), "bad file name")
@@ -310,7 +311,7 @@ do
   local c = computer(files, { "1" })
   check("upgrade: runs", run(c))
   local D = "etc/zos/update/"
-  check("upgrade: staged", c.files[D .. "new/boot.lua"] == "-- new boot" and c.files[D .. "ready"] == "1.0")
+  check("upgrade: staged", c.files[D .. "new/boot.lua"] == "-- new boot" and c.files[D .. "ready"] == "1.0.0")
   check("upgrade: stages the bootstrap", c.files[D .. "startup.new"] == "-- new startup")
   check("upgrade: replaces a failed marker", c.files[D .. "failed"] == nil)
   check("upgrade: apps aren't staged", not c.env.fs.exists(D .. "new/apps"))

@@ -18,13 +18,16 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
 ```lua
 {
     name = "Notes",                      -- required
-    version = "1.0",                     -- required, a string
+    version = "1.0.0",                   -- required: major.minor.patch
     description = "Write and keep notes", -- shown on the desktop and in App Manager
     priority = 10,                       -- lower comes first on the desktop and starts first (default 100)
     author = "you",
-    minZos = "1.0",                      -- optional: the oldest zOS it runs on
+    minZos = "1.0.0",                    -- optional: the oldest zOS it runs on
 }
 ```
+
+Versions and `minZos` MUST have exactly a major, minor and patch number, such as `1.2.0`. Anything
+else, such as `1.2` or `1.2.0-beta`, is refused by the build and by zOS.
 
 Set `minZos` when an app uses something a newer zOS added. Nothing older will install that
 version, whichever way it's installed, and the build stops if `minZos` is newer than the zOS in

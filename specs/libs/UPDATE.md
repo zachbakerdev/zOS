@@ -27,7 +27,7 @@ Manifests are plain text, read as data. Each starts with a header line and MUST 
 
 ```
 zos-update 1
-version=1.0
+version=1.0.0
 size=86412
 sha256=<64 hex characters>
 end

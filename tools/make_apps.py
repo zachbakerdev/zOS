@@ -3,7 +3,7 @@
 
 An app's source is a folder, apps/<id>/, holding:
 
-    app.manifest    { name = "Notes", description = "...", version = "1.0", priority = 10, minZos = "1.0" }
+    app.manifest    { name = "Notes", description = "...", version = "1.0.0", priority = 10, minZos = "1.0.0" }
     main.lua        the program the desktop runs
     service.lua     optional: started at boot to run in the background
     ...             any other files the app needs (modules, data)
@@ -40,7 +40,8 @@ DEFAULT_OUT_DIR = os.path.join(ROOT, "dist", "apps")
 FORMAT_VERSION = 1
 ID_PATTERN = re.compile(r"^[a-z0-9_-]{1,32}$")
 MAX_PATH = 128
-MIN_ZOS = re.compile(r"^\d[\d.]*$")
+# Major.minor.patch, and nothing else. Must match versionParts in src/.zos/lib/apps.lua.
+VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 # Must match validPath in src/.zos/lib/apps.lua.
 PATH_PART = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
 
@@ -52,8 +53,11 @@ def read_version():
     with open(os.path.join(ROOT, "src", ".zos", "lib", "system.lua"), encoding="ascii") as f:
         for line in f:
             if line.strip().startswith("VERSION = "):
-                return line.split('"')[1]
-    return "?"
+                version = line.split('"')[1]
+                if not VERSION.fullmatch(version):
+                    sys.exit(f"system.VERSION must be major.minor.patch, like 1.0.0, not {version}")
+                return version
+    sys.exit("src/.zos/lib/system.lua has no VERSION")
 
 
 def collect_files(root):
@@ -219,26 +223,23 @@ def parse_lua_value(text):
 def check_manifest(m):
     """Raise ManifestError unless m is a valid manifest. Must match checkManifest in lib/apps.lua."""
     if not isinstance(m, dict):
-        raise ManifestError("must be a table, like { name = \"My App\", version = \"1.0\" }")
+        raise ManifestError("must be a table, like { name = \"My App\", version = \"1.0.0\" }")
     if not isinstance(m.get("name"), str) or not m["name"].strip():
         raise ManifestError("needs a name, like name = \"My App\"")
-    if not isinstance(m.get("version"), str) or not m["version"].strip():
-        raise ManifestError("needs a version string, like version = \"1.0\" (in quotes)")
+    if not isinstance(m.get("version"), str) or not VERSION.fullmatch(m["version"]):
+        raise ManifestError("needs a major.minor.patch version, like version = \"1.0.0\" (in quotes)")
     for key in ("description", "author"):
         if key in m and not isinstance(m[key], str):
             raise ManifestError(f"{key} must be a string")
     if "priority" in m and (isinstance(m["priority"], bool) or not isinstance(m["priority"], (int, float))):
         raise ManifestError("priority must be a number")
-    if "minZos" in m and (not isinstance(m["minZos"], str) or not MIN_ZOS.match(m["minZos"])):
-        raise ManifestError("minZos must be a version string, like minZos = \"2.1\" (in quotes)")
+    if "minZos" in m and (not isinstance(m["minZos"], str) or not VERSION.fullmatch(m["minZos"])):
+        raise ManifestError("minZos must be a major.minor.patch version, like minZos = \"2.1.0\" (in quotes)")
 
 
 def version_key(version):
-    """Compares like apps.compareVersions in lib/apps.lua, where missing numbers count as 0."""
-    numbers = [int(n) for n in re.findall(r"\d+", version)]
-    while numbers and numbers[-1] == 0:
-        numbers.pop()
-    return numbers
+    """Compares like apps.compareVersions in lib/apps.lua."""
+    return [int(n) for n in version.split(".")]
 
 
 def find_apps():
@@ -279,7 +280,7 @@ def pack(app, minify=True):
     except ManifestError as e:
         fail(f"app.manifest: {e}")
     # It ships with this version of zOS, so nothing could ever install it.
-    if version_key(manifest.get("minZos", "0")) > version_key(read_version()):
+    if version_key(manifest.get("minZos", "0.0.0")) > version_key(read_version()):
         fail(f"app.manifest: needs zOS {manifest['minZos']}, but this is zOS {read_version()}")
 
     packed = minify_files(files) if minify else files

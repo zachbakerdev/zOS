@@ -1,8 +1,8 @@
 {
     name = "Mail",
     description = "Send and read mail through a mail server",
-    version = "1.0",
+    version = "1.0.0",
     author = "zOS",
     priority = 20,
-    minZos = "1.0",
+    minZos = "1.0.0",
 }

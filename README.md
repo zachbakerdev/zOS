@@ -32,13 +32,14 @@ its headers, e.g. Debian's `lua5.1` and `liblua5.1-0-dev`):
 luarocks --tree lua_modules --lua-version=5.1 install luasrcdiet 1.0.0-2
 ```
 
-To publish a release, set `VERSION` in `src/.zos/lib/system.lua`, then push a tag that matches it.
+To publish a release, set `VERSION` in `src/.zos/lib/system.lua` to a major.minor.patch version
+such as `1.0.0`, then push a tag that matches it.
 `.github/workflows/release.yml` runs the tests, builds everything with `./build.sh` and publishes
 the release.
 
 ```
-git tag v1.0
-git push origin v1.0
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
 ## Installing and upgrading
@@ -173,10 +174,10 @@ An app is a folder with a manifest and a main program, installed to `/.zos/apps/
 {
   name = "My App",
   description = "Shown at the bottom of the desktop",
-  version = "1.0",
+  version = "1.0.0",       -- required: major.minor.patch
   author = "you",
   priority = 10,           -- optional: lower comes first (default 100)
-  minZos = "1.0",          -- optional: the oldest zOS it runs on
+  minZos = "1.0.0",        -- optional: the oldest zOS it runs on
 }
 ```
 

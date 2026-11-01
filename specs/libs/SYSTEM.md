@@ -8,7 +8,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
 | Name             | Value                                  |
 | ---------------- | -------------------------------------- |
-| `system.VERSION` | The version of zOS, such as `"1.0"`    |
+| `system.VERSION` | The version of zOS, such as `"1.0.0"`  |
 | `system.ROOT`    | `/.zos`, the system's code             |
 | `system.DATA`    | `/etc/zos`, the system's data          |
 

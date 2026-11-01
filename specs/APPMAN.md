@@ -17,7 +17,7 @@ appman help                   Show this list
 
 ```
 > appman install notes
-Notes 1.0  (new)
+Notes 1.0.0  (new)
 id: notes   by zOS
 3 files, 4.1 KB
 
@@ -42,10 +42,10 @@ Prints one line for each installed app in `apps.list` order, with its id, versio
 
 ```
 > appman list
-files 1.0 Files
-terminal 1.0 Terminal
-appman 1.0 App Manager
-notes 1.0 Notes
+files 1.0.0 Files
+terminal 1.0.0 Terminal
+appman 1.0.0 App Manager
+notes 1.0.0 Notes
 ```
 
 ## appman available
@@ -54,9 +54,9 @@ Prints one line for each entry in `update.checkApps`, in its order, with its id,
 
 ```
 > appman available
-notes 1.1 update from 1.0
-mail 1.0 new
-files 1.0 installed
+notes 1.1.0 update from 1.0.0
+mail 1.0.0 new
+files 1.0.0 installed
 ```
 
 ## appman install

@@ -13,7 +13,7 @@ A .za file is simply a serialized lua object where the key is the path of a file
 ```lua
 {
   ["za:metadata"] = { version = 1, id = "notes" },
-  ["app.manifest"] = "{ name = \"Notes\", version = \"1.0\" }\010",
+  ["app.manifest"] = "{ name = \"Notes\", version = \"1.0.0\" }\010",
   ["lib/store.lua"] = "return {}\010",
   ["main.lua"] = "print(\"Hello\")\010",
 }

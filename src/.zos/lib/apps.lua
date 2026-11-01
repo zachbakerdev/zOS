@@ -32,14 +32,24 @@ end
 
 -- Versions -------------------------------------------------------------------------------------
 
+-- Every version is major.minor.patch. Keep this the same as VERSION in tools/make_apps.py.
+local function versionParts(version)
+    if type(version) ~= "string" then return nil end
+    local major, minor, patch = version:match("^(%d+)%.(%d+)%.(%d+)$")
+    if not major then return nil end
+    return { tonumber(major), tonumber(minor), tonumber(patch) }
+end
+
+function apps.validVersion(version)
+    return versionParts(version) ~= nil
+end
+
 function apps.compareVersions(a, b)
-    local x, y = {}, {}
-    for n in tostring(a):gmatch("%d+") do x[#x + 1] = tonumber(n) end
-    for n in tostring(b):gmatch("%d+") do y[#y + 1] = tonumber(n) end
-    for i = 1, math.max(#x, #y) do
-        local p, q = x[i] or 0, y[i] or 0
-        if p < q then return -1 end
-        if p > q then return 1 end
+    local x = versionParts(a) or error("Not a version: " .. tostring(a), 2)
+    local y = versionParts(b) or error("Not a version: " .. tostring(b), 2)
+    for i = 1, 3 do
+        if x[i] < y[i] then return -1 end
+        if x[i] > y[i] then return 1 end
     end
     return 0
 end
@@ -52,15 +62,15 @@ end
 local function checkManifest(m)
     if type(m) ~= "table" then return nil, "The manifest isn't a table." end
     if type(m.name) ~= "string" or not m.name:match("%S") then return nil, "The manifest has no name." end
-    if type(m.version) ~= "string" or not m.version:match("%S") then return nil, "The manifest has no version." end
+    if not apps.validVersion(m.version) then return nil, "The manifest's version isn't like 1.0.0." end
     for _, field in ipairs({ "description", "author" }) do
         if m[field] ~= nil and type(m[field]) ~= "string" then
             return nil, "The manifest's " .. field .. " isn't text."
         end
     end
     if m.priority ~= nil and type(m.priority) ~= "number" then return nil, "The manifest's priority isn't a number." end
-    if m.minZos ~= nil and (type(m.minZos) ~= "string" or not m.minZos:match("^%d+[%d%.]*$")) then
-        return nil, "The manifest's minZos isn't a version."
+    if m.minZos ~= nil and not apps.validVersion(m.minZos) then
+        return nil, "The manifest's minZos isn't like 1.0.0."
     end
     return m
 end

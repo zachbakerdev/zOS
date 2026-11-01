@@ -1,6 +1,6 @@
 # Publishes a GitHub release when a version tag is pushed:
 #
-#     git tag v1.0 && git push origin v1.0
+#     git tag v1.0.0 && git push origin v1.0.0
 #
 # The tag must match VERSION in src/.zos/lib/system.lua.
 # Computers update themselves from this release, so anything published here runs on them.

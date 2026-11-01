@@ -81,7 +81,9 @@ Returns whether `path` can be a file in an app: relative, at most 128 bytes, and
 
 ### Manifests
 
-`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` and `version` are required text. `description` and `author` MUST be text, `priority` MUST be a number, and `minZos` MUST be a version like `"1.0"`.
+`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `priority` MUST be a number, and `minZos` MUST be a version.
+
+A version MUST be exactly three whole numbers, major, minor and patch, separated by dots, such as `"1.0.0"`. Nothing else is a version: `"1.0"`, `"1.0.0.0"`, `"v1.0.0"` and `"1.0.0-beta"` are all refused.
 
 ### Constants
 
@@ -125,7 +127,11 @@ Returns whether this version of zOS is new enough. `nil` is always supported.
 
 ### apps.compareVersions(a, b)
 
-Compares two versions by their numbers. It returns -1 if `a` is older than `b`, 0 if they are equal and 1 if `a` is newer. Missing numbers count as 0, so `1.0` equals `1`, and `1.10` is newer than `1.9`.
+Compares two versions by their numbers. It returns -1 if `a` is older than `b`, 0 if they are equal and 1 if `a` is newer, so `1.10.0` is newer than `1.9.0`. It raises an error if either isn't a version.
+
+### apps.validVersion(version)
+
+Returns whether `version` is a major.minor.patch version string.
 
 
 ## Changing apps

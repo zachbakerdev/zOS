@@ -1,7 +1,7 @@
 {
     name = "Terminal",
     description = "The CraftOS shell",
-    version = "1.0",
+    version = "1.0.0",
     author = "zOS",
     priority = 85,
 }

@@ -227,10 +227,10 @@ end
 do
   local c = setup(installed({
     ["etc/zos/users.db"] = "accounts",
-    [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }',
+    [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0.0" }',
   }))
   c.publish(imageText(c))
-  publishApps(c, { terminal = "2.0", mine = "2.0", other = "2.0" })
+  publishApps(c, { terminal = "2.0.0", mine = "2.0.0", other = "2.0.0" })
   call(c, c.update.tick)
   check("tick downloads by itself", c.fetched[IMAGE] == 1)
   check("waits for the next boot", c.update.stagedVersion() == NEXT)
@@ -258,14 +258,14 @@ do
 end
 
 do -- Offline when the update finishes: the apps catch up later.
-  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }' }))
+  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0.0" }' }))
   c.publish(imageText(c))
   call(c, c.update.tick)
   boot(c)
   c.env.require("system").VERSION = NEXT
   call(c, c.update.finish)
   check("offline: apps stay due", c.env.fs.exists("etc/zos/update/apps-due"))
-  publishApps(c, { mine = "2.0" })
+  publishApps(c, { mine = "2.0.0" })
   call(c, c.update.tick)
   check("offline: tick catches up", c.files[".zos/apps/mine/main.lua"] == "print('hi')")
   check("offline: no longer due", not c.env.fs.exists("etc/zos/update/apps-due"))
@@ -301,7 +301,7 @@ end
 do
   local c = setup(installed())
   c.publish(imageText(c, { ["/.zos/boot.lua"] = "-- broken boot" }))
-  publishApps(c, { terminal = "2.0" })
+  publishApps(c, { terminal = "2.0.0" })
   call(c, c.update.tick)
   check("falls back and reboots", boot(c) == "reboot")
   check("old version restored", c.files[".zos/boot.lua"] == "-- old boot" and c.files[".zos/lib/system.lua"] == "-- old lib")
@@ -325,24 +325,24 @@ end
 
 local function withApps(extra)
   return installed({
-    [".zos/apps/old/main.lua"] = "old", [".zos/apps/old/app.manifest"] = '{ name = "old", version = "1.0" }',
-    [".zos/apps/same/main.lua"] = "same", [".zos/apps/same/app.manifest"] = '{ name = "same", version = "2.0" }',
-    [".zos/apps/ahead/main.lua"] = "ahead", [".zos/apps/ahead/app.manifest"] = '{ name = "ahead", version = "5.0" }',
+    [".zos/apps/old/main.lua"] = "old", [".zos/apps/old/app.manifest"] = '{ name = "old", version = "1.0.0" }',
+    [".zos/apps/same/main.lua"] = "same", [".zos/apps/same/app.manifest"] = '{ name = "same", version = "2.0.0" }',
+    [".zos/apps/ahead/main.lua"] = "ahead", [".zos/apps/ahead/app.manifest"] = '{ name = "ahead", version = "5.0.0" }',
   })
 end
 
 do
   local c = setup(withApps())
-  publishApps(c, { old = "2.0", same = "2.0", ahead = "2.0", fresh = "1.0" })
+  publishApps(c, { old = "2.0.0", same = "2.0.0", ahead = "2.0.0", fresh = "1.0.0" })
   local list = call(c, c.update.checkApps)
   check("lists the release's apps", list and #list == 4)
-  check("updates come first", list[1].id == "old" and list[1].newer and list[1].current == "1.0")
+  check("updates come first", list[1].id == "old" and list[1].newer and list[1].current == "1.0.0")
   check("then new apps", list[2].id == "fresh" and not list[2].current)
   check("same version isn't an update", not list[3].newer and not list[4].newer)
   check("older version isn't an update", list[3].id == "ahead" or list[4].id == "ahead")
 
   local pkg = call(c, c.update.downloadApp, list[1])
-  check("downloads a checked package", pkg and pkg.id == "old" and pkg.manifest.version == "2.0")
+  check("downloads a checked package", pkg and pkg.id == "old" and pkg.manifest.version == "2.0.0")
 
   local good = c.site[appUrl("old")]
   c.site[appUrl("old")] = good:gsub("print", "error")
@@ -352,7 +352,7 @@ do
   check("reports a missing app", not call(c, c.update.downloadApp, list[1]))
 
   -- The right size and hash, but a different app.
-  publishApps(c, { old = "2.0", same = "2.0" })
+  publishApps(c, { old = "2.0.0", same = "2.0.0" })
   c.site[appUrl("old")] = c.site[appUrl("same")]
   local entry = call(c, c.update.checkApps)[1]
   entry.sha256 = c.crypto.sha256(c.site[appUrl("old")])
@@ -360,7 +360,7 @@ do
   none, err = call(c, c.update.downloadApp, entry)
   check("refuses an app that isn't the one listed", not none and err:find("listed", 1, true))
 
-  publishApps(c, { old = "2.0" })
+  publishApps(c, { old = "2.0.0" })
   c.site[APPS_MANIFEST] = c.site[APPS_MANIFEST]:sub(1, -5)
   none, err = call(c, c.update.checkApps)
   check("refuses a cut-off list", not none and err:find("damaged", 1, true))
@@ -371,6 +371,18 @@ do
 
   c.site[MANIFEST] = "zos-apps 1\nrelease=9.0.0\nversion=9.0.0\nsize=1\nsha256=ab\nend\n"
   check("an app list doesn't pass as a zOS manifest", call(c, c.update.check) == nil)
+
+  c.site[MANIFEST] = c.manifest("image", "9.0")
+  local refused, why = call(c, c.update.check)
+  check("refuses a zOS release with a short version", refused == nil and why:find("damaged", 1, true))
+
+  local line = "app=old\t%s\t5\t" .. string.rep("0", 64) .. "\t%s\tOld\tOld app\n"
+  c.site[APPS_MANIFEST] = "zos-apps 1\nrelease=9.0.0\n" .. line:format("2.0", "") .. "end\n"
+  refused, why = call(c, c.update.checkApps)
+  check("refuses an app with a short version", refused == nil and why:find("damaged", 1, true))
+  c.site[APPS_MANIFEST] = "zos-apps 1\nrelease=9.0.0\n" .. line:format("2.0.0", "2.0") .. "end\n"
+  refused, why = call(c, c.update.checkApps)
+  check("refuses an app with a short minZos", refused == nil and why:find("damaged", 1, true))
 end
 
 -- Driving the real App Manager -------------------------------------------------------
@@ -398,17 +410,17 @@ do
   local c = setup(withApps())
   c.env.require("system").VERSION = NEXT
   c.env.require("system").VERSION = NEXT
-  publishApps(c, { old = "2.0", same = "2.0", fresh = "1.0", other = "3.0" })
+  publishApps(c, { old = "2.0.0", same = "2.0.0", fresh = "1.0.0", other = "3.0.0" })
   c.site[appUrl("other")] = nil -- this one fails partway through
   c.files[".zos/apps/other/main.lua"] = "other"
-  c.files[".zos/apps/other/app.manifest"] = '{ name = "other", version = "1.0" }'
+  c.files[".zos/apps/other/app.manifest"] = '{ name = "other", version = "1.0.0" }'
   appman(c, true)
   check("App Manager offers GitHub", screenHas(c, "Get apps from GitHub"))
   key(c, "enter")
   check("offers to update all", screenHas(c, "Update all (2)"))
-  check("shows the update", c.screenText():find("App old 2.0  (update from 1.0)", 1, true))
-  check("shows new apps", c.screenText():find("App fresh 1.0  (new)", 1, true))
-  check("shows installed apps", c.screenText():find("App same 2.0  (installed)", 1, true))
+  check("shows the update", c.screenText():find("App old 2.0.0  (update from 1.0.0)", 1, true))
+  check("shows new apps", c.screenText():find("App fresh 1.0.0  (new)", 1, true))
+  check("shows installed apps", c.screenText():find("App same 2.0.0  (installed)", 1, true))
 
   key(c, "enter")
   check("asks first", screenHas(c, "Install 2 update(s)?"))
@@ -418,26 +430,26 @@ do
   check("keeps going after a failure", c.files[".zos/apps/old/main.lua"] == "print('hi')")
   check("leaves the failed app alone", c.files[".zos/apps/other/main.lua"] == "other")
   check("doesn't install new apps", not c.env.fs.exists(".zos/apps/fresh"))
-  check("logs the install", c.files["etc/zos/system.log"]:find("installed app old 2.0", 1, true))
+  check("logs the install", c.files["etc/zos/system.log"]:find("installed app old 2.0.0", 1, true))
   key(c, "enter")
   screenHas(c, "Get apps from GitHub")
 
   -- One new app: Update all, other, fresh, old, same, Back.
-  c.site[appUrl("other")] = appText(c, "other", "3.0")
-  publishApps(c, { same = "2.0", fresh = "1.0" })
+  c.site[appUrl("other")] = appText(c, "other", "3.0.0")
+  publishApps(c, { same = "2.0.0", fresh = "1.0.0" })
   key(c, "enter")
-  screenHas(c, "App fresh 1.0  (new)")
+  screenHas(c, "App fresh 1.0.0  (new)")
   key(c, "enter")
   check("shows the usual install screen", screenHas(c, "Install it?"))
   char(c, "y")
-  check("installs it", screenHas(c, "Installed fresh 1.0"))
+  check("installs it", screenHas(c, "Installed fresh 1.0.0"))
   check("files in place", c.files[".zos/apps/fresh/main.lua"] == "print('hi')")
   key(c, "enter")
   screenHas(c, "Get apps from GitHub")
 
   -- Up to date: no Update all, and nothing to reinstall.
   key(c, "enter")
-  screenHas(c, "App same 2.0  (installed)")
+  screenHas(c, "App same 2.0.0  (installed)")
   check("nothing to update", not c.screenText():find("Update all", 1, true))
   pick(c, 1)
   check("won't reinstall", screenHas(c, "is up to date"))
@@ -445,7 +457,7 @@ end
 
 do
   local c = setup(withApps())
-  publishApps(c, { old = "2.0" })
+  publishApps(c, { old = "2.0.0" })
   appman(c, false)
   screenHas(c, "Get apps from GitHub")
   key(c, "enter")
@@ -462,37 +474,42 @@ do
   local apps = c.env.require("apps")
   check("no minZos runs anywhere", apps.supports(nil))
   check("same version is enough", apps.supports(CURRENT))
-  check("missing numbers count as 0", apps.supports("2") and apps.supports("2.0"))
-  check("compares numbers, not text", not apps.supports("2.0.10") and apps.supports("1.10"))
+  for _, bad in ipairs({ "1", "1.0", "1.0.0.0", "v1.0.0", "1.0.0-beta", "1.0.", ".1.0", "1..0", " 1.0.0", "1.0.0\n", "", 1 }) do
+    check("not a version: " .. tostring(bad), not apps.validVersion(bad))
+    check("refuses the version " .. tostring(bad), not apps.parse(appText(c, "x", bad)))
+    check("can't compare " .. tostring(bad), not pcall(apps.compareVersions, bad, "1.0.0"))
+  end
+  check("a version has three numbers", apps.validVersion("0.0.0") and apps.validVersion("10.20.30"))
+  check("compares numbers, not text", not apps.supports("2.0.10") and apps.supports("1.10.0"))
   check("newer isn't enough", not apps.supports("2.0.1"))
 
-  local function parsed(minZos) return apps.parse(appText(c, "x", "1.0", minZos)) end
-  check("accepts a version", parsed("2.1"))
-  check("refuses a bad minZos", not parsed("soon") and not parsed("2.1-beta"))
+  local function parsed(minZos) return apps.parse(appText(c, "x", "1.0.0", minZos)) end
+  check("accepts a version", parsed("2.1.0"))
+  check("refuses a bad minZos", not parsed("soon") and not parsed("2.1.0-beta") and not parsed("2.1"))
 
-  local pkg = parsed("3.0")
+  local pkg = parsed("3.0.0")
   local app, err = apps.install(pkg)
-  check("install refuses a newer minZos", not app and err:find("needs zOS 3.0", 1, true))
+  check("install refuses a newer minZos", not app and err:find("needs zOS 3.0.0", 1, true))
   check("install leaves nothing behind", not c.env.fs.exists(".zos/apps/x"))
-  check("install allows a met minZos", apps.install(parsed("2.0")))
-  check("minZos is kept on the app", apps.get("x").minZos == "2.0")
+  check("install allows a met minZos", apps.install(parsed("2.0.0")))
+  check("minZos is kept on the app", apps.get("x").minZos == "2.0.0")
 
-  publishApps(c, { old = { "2.0", "3.0" }, same = { "3.0", "3.0" }, fresh = { "1.0", "3.0" }, ok = { "1.0", "2.0" } })
+  publishApps(c, { old = { "2.0.0", "3.0.0" }, same = { "3.0.0", "3.0.0" }, fresh = { "1.0.0", "3.0.0" }, ok = { "1.0.0", "2.0.0" } })
   local list = call(c, c.update.checkApps)
   check("apps it can run come first", list[1].id == "ok" and list[1].supported)
-  check("marks an update it can't run", list[2].minZos == "3.0" and not list[2].supported)
+  check("marks an update it can't run", list[2].minZos == "3.0.0" and not list[2].supported)
   check("every other app is marked", not list[3].supported and not list[4].supported)
 end
 
 do
   local c = setup(withApps())
-  publishApps(c, { old = { "2.0", "3.0" }, same = { "3.0", "1.0" }, fresh = { "1.0", "3.0" } })
+  publishApps(c, { old = { "2.0.0", "3.0.0" }, same = { "3.0.0", "1.0.0" }, fresh = { "1.0.0", "3.0.0" } })
   appman(c, true)
   screenHas(c, "Get apps from GitHub")
   key(c, "enter")
   check("offers only what it can install", screenHas(c, "Update all (1)"))
-  check("shows what's needed", c.screenText():find("App old 2.0  (needs zOS 3.0)", 1, true))
-  check("shows it for new apps too", c.screenText():find("App fresh 1.0  (needs zOS 3.0)", 1, true))
+  check("shows what's needed", c.screenText():find("App old 2.0.0  (needs zOS 3.0.0)", 1, true))
+  check("shows it for new apps too", c.screenText():find("App fresh 1.0.0  (needs zOS 3.0.0)", 1, true))
 
   -- Update all, App same, App fresh, App old, Back.
   pick(c, 3)
@@ -507,26 +524,26 @@ do
   check("Update all leaves it out", not c.screenText():find("App old", 1, true))
   char(c, "y")
   screenHas(c, "Everything is up to date")
-  check("the rest updates", c.files[".zos/apps/same/app.manifest"]:find('"3.0"', 1, true))
+  check("the rest updates", c.files[".zos/apps/same/app.manifest"]:find('"3.0.0"', 1, true))
   check("still not installed", c.files[".zos/apps/old/main.lua"] == "old")
 end
 
 do -- Installing from a file gets the same check.
   local c = setup(withApps())
-  c.files["new.za"] = appText(c, "fresh", "1.0", "3.0")
+  c.files["new.za"] = appText(c, "fresh", "1.0.0", "3.0.0")
   appman(c, true)
   screenHas(c, "Install from file")
   pick(c, 2)
   screenHas(c, "Path")
   c.env.os.queueEvent("sim_line", "new.za")
-  check("a file gets the same check", screenHas(c, "needs zOS 3.0"))
+  check("a file gets the same check", screenHas(c, "needs zOS 3.0.0"))
   check("nothing installed from the file", not c.env.fs.exists(".zos/apps/fresh"))
 end
 
 do -- An update whose app needs more than the update provides is skipped, and zOS still boots.
-  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0" }' }))
+  local c = setup(installed({ [".zos/apps/mine/main.lua"] = "old", [".zos/apps/mine/app.manifest"] = '{ name = "mine", version = "1.0.0" }' }))
   c.publish(imageText(c))
-  publishApps(c, { mine = { "2.0", "99.0" } })
+  publishApps(c, { mine = { "2.0.0", "99.0.0" } })
   call(c, c.update.tick)
   check("boots with an app it can't run", boot(c) == "booted")
   c.env.require("system").VERSION = NEXT

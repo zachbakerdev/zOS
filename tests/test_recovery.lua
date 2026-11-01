@@ -376,7 +376,7 @@ end
 local function appImage(id, extra)
   local contents = {
     ["za:metadata"] = { version = 1, id = id },
-    ["app.manifest"] = '{ name = "Notes", version = "1.0" }',
+    ["app.manifest"] = '{ name = "Notes", version = "1.0.0" }',
     ["main.lua"] = "return 1",
   }
   for path, data in pairs(extra or {}) do contents[path] = data end

@@ -52,7 +52,7 @@ function update.check()
         if key then info[key] = value end
     end
     info.size = tonumber(info.size)
-    if not info.version or not info.size or not crypto.isHex(info.sha256, 64) then
+    if not apps.validVersion(info.version) or not info.size or not crypto.isHex(info.sha256, 64) then
         return nil, "The update list is damaged."
     end
     if apps.compareVersions(info.version, system.VERSION) <= 0 then return false end
@@ -123,7 +123,8 @@ end
 local function parseAppLine(line)
     local fields = {}
     for field in (line .. "\t"):gmatch("(.-)\t") do fields[#fields + 1] = field end
-    if #fields < 7 or not apps.validId(fields[1]) or not tonumber(fields[3]) or not crypto.isHex(fields[4], 64) then
+    if #fields < 7 or not apps.validId(fields[1]) or not apps.validVersion(fields[2]) or not tonumber(fields[3])
+        or not crypto.isHex(fields[4], 64) or (fields[5] ~= "" and not apps.validVersion(fields[5])) then
         return nil
     end
     return {

@@ -111,6 +111,12 @@ function ui.input(label, mask, default)
     return line or ""
 end
 
+-- Ask for a line of text with its label on the line above. Otherwise as for ui.input.
+function ui.field(label, mask, default)
+    ui.text(label .. ":", theme.accent)
+    return ui.input(nil, mask, default)
+end
+
 function ui.waitEnter(prompt)
     ui.text(prompt or "Press Enter to continue.", theme.dim)
     while true do

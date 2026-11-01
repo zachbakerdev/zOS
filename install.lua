@@ -26,12 +26,121 @@ local UPDATE = DATA .. "/update"
 local NEW, READY, STARTUP_STAGED = UPDATE .. "/new", UPDATE .. "/ready", UPDATE .. "/startup.new"
 local FAILED = UPDATE .. "/failed"
 
+local TITLE = "zOS Installer"
+
 local args = { ... }
 local source = fs.getDir(shell.getRunningProgram())
 
+-- The screen ------------------------------------------------------------------------------------
+-- zOS isn't on the computer yet, so this can't use lib/ui.lua, but it should look the same.
+
+local colour = term.isColour and term.isColour()
+local theme = {
+    bg = colors.black,
+    fg = colors.white,
+    dim = colour and colors.lightGray or colors.white,
+    accent = colour and colors.cyan or colors.white,
+    bad = colour and colors.red or colors.white,
+    barBg = colour and colors.blue or colors.white,
+    barFg = colour and colors.white or colors.black,
+    selectBg = colour and colors.cyan or colors.white,
+    selectFg = colors.black,
+}
+
+local function at(x, y, text, fg, bg)
+    term.setCursorPos(x, y)
+    term.setTextColor(fg or theme.fg)
+    term.setBackgroundColor(bg or theme.bg)
+    term.write(text)
+end
+
+local function wrap(text, width)
+    local lines, line = {}, ""
+    for word in text:gmatch("%S+") do
+        local joined = line == "" and word or line .. " " .. word
+        if #joined <= width then
+            line = joined
+        else
+            if line ~= "" then lines[#lines + 1] = line end
+            while #word > width do
+                lines[#lines + 1] = word:sub(1, width)
+                word = word:sub(width + 1)
+            end
+            line = word
+        end
+    end
+    lines[#lines + 1] = line
+    return lines
+end
+
+local function screen()
+    local width = term.getSize()
+    term.setCursorBlink(false)
+    term.setBackgroundColor(theme.bg)
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setBackgroundColor(theme.barBg)
+    term.clearLine()
+    at(2, 1, TITLE:sub(1, width - 2), theme.barFg, theme.barBg)
+    term.setBackgroundColor(theme.bg)
+    term.setCursorPos(1, 3)
+end
+
+-- Write wrapped text, leaving the shell's colours and a free line for it when the program ends.
+local function say(text, color)
+    local width, height = term.getSize()
+    local _, y = term.getCursorPos()
+    for _, line in ipairs(wrap(text, width - 2)) do
+        at(2, y, line, color)
+        y = y + 1
+        if y > height then
+            term.scroll(1)
+            y = height
+        end
+    end
+    term.setTextColor(theme.fg)
+    term.setCursorPos(1, y)
+end
+
+-- Ask which of `items` ({ label, hint, fg, mode }) to use, like the desktop's menu. The selected
+-- item's hint is at the bottom of the screen. Returns that item's mode.
+local function menu(question, items)
+    local selected = 1
+    while true do
+        local width, height = term.getSize()
+        screen()
+        say(question, theme.accent)
+        say("")
+        local _, top = term.getCursorPos()
+        for i, item in ipairs(items) do
+            local chosen = i == selected
+            local label = item.label:sub(1, width - 2)
+            at(1, top + i - 1, " " .. label .. string.rep(" ", width - #label - 1),
+                chosen and theme.selectFg or item.fg, chosen and theme.selectBg or theme.bg)
+        end
+        local hint = wrap(items[selected].hint, width - 2)
+        for i, line in ipairs(hint) do at(2, height - #hint + i, line, theme.dim) end
+
+        local event, a, _, y = os.pullEvent()
+        if event == "key" then
+            if a == keys.up then
+                selected = selected > 1 and selected - 1 or #items
+            elseif a == keys.down then
+                selected = selected < #items and selected + 1 or 1
+            elseif a == keys.enter or a == keys.numPadEnter then
+                return items[selected].mode
+            end
+        elseif event == "mouse_scroll" then
+            selected = math.max(1, math.min(#items, selected + a))
+        elseif event == "mouse_click" and items[y - top + 1] then
+            return items[y - top + 1].mode
+        end
+    end
+end
+
 local function fail(text)
-    printError(text)
-    print("Nothing was changed on this computer.")
+    say(text, theme.bad)
+    say("Nothing was changed on this computer.")
     error("", 0) -- an empty message prints nothing more
 end
 
@@ -45,7 +154,7 @@ end
 
 local function download(url)
     if not http then fail("This computer can't use HTTP, so it can't download zOS.") end
-    print("Downloading " .. url)
+    say("Downloading " .. url)
     local response, err = http.get(url, nil, true)
     if not response then fail("The download failed: " .. tostring(err)) end
     local text = response.readAll()
@@ -170,33 +279,34 @@ end
 
 -- Choosing what to do --------------------------------------------------------------------------
 
-local function ask(title, choices)
-    print()
-    print(title)
-    for i, choice in ipairs(choices) do print(("  %d. %s"):format(i, choice.label)) end
-    while true do
-        write("Choose: ")
-        local choice = choices[tonumber(read())]
-        if choice then return choice.mode end
-    end
-end
+local CANCEL = { label = "Cancel", hint = "Leaves this computer as it is.", fg = theme.dim }
 
 local function chooseMode(found, version)
+    local reinstall = {
+        label = "Clean reinstall",
+        hint = "Deletes all accounts, keys and settings. Apps and user files stay.",
+        fg = theme.bad,
+        mode = "reinstall",
+    }
     if found == "current" then
-        return ask("zOS is already installed. Install zOS " .. version .. "?", {
-            { label = "Upgrade: keep users, apps and settings", mode = "upgrade" },
-            { label = "Clean reinstall: delete all accounts and keys", mode = "reinstall" },
-            { label = "Cancel" },
+        return menu("zOS is already installed. Install zOS " .. version .. "?", {
+            {
+                label = "Upgrade",
+                hint = "Keeps users, apps and settings, and rolls back if it doesn't boot.",
+                mode = "upgrade",
+            },
+            reinstall,
+            CANCEL,
         })
     elseif found == "damaged" then
-        return ask("This computer has a damaged zOS, which can't be upgraded.", {
-            { label = "Clean reinstall zOS " .. version .. ": delete all accounts and keys", mode = "reinstall" },
-            { label = "Cancel" },
+        return menu("This computer has a damaged zOS, which can't be upgraded. Install zOS " .. version .. "?", {
+            reinstall,
+            CANCEL,
         })
     end
-    return ask("Install zOS " .. version .. " on computer #" .. os.getComputerID() .. "?", {
-        { label = "Install: startup files move to " .. BACKUP, mode = "install" },
-        { label = "Cancel" },
+    return menu("Install zOS " .. version .. " on computer #" .. os.getComputerID() .. "?", {
+        { label = "Install", hint = "Moves startup files to " .. BACKUP .. ".", mode = "install" },
+        CANCEL,
     })
 end
 
@@ -312,8 +422,9 @@ local function ejectSource(imagePath)
 end
 
 local function main()
+    screen()
     local text, imagePath = findImage()
-    print("Checking the image...")
+    say("Checking the image...")
     local files = parseImage(text)
     text = nil -- it's the biggest thing in memory
     local version = checkComplete(files)
@@ -322,12 +433,14 @@ local function main()
     local found = detect()
     local mode = chooseMode(found, version)
     if not mode then
-        print("Cancelled. Nothing was changed.")
+        screen()
+        say("Cancelled. Nothing was changed.")
         return
     end
 
     os.pullEvent = os.pullEventRaw -- Ctrl+T mustn't be able to leave a half-installed system
-    print("Installing zOS " .. version .. "...")
+    screen()
+    say("Installing zOS " .. version .. "...")
     if mode == "upgrade" then
         upgrade(files, version)
     else
@@ -335,7 +448,7 @@ local function main()
     end
 
     ejectSource(imagePath)
-    print("Done. Restarting...")
+    say("Done. Restarting...", theme.accent)
     sleep(1)
     os.reboot()
     while true do os.pullEventRaw() end

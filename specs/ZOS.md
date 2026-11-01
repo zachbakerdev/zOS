@@ -128,7 +128,7 @@ A service is a coroutine that runs alongside the session. Services get their tur
 
 ## Installation
 
-zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it's given, or the latest release. On a setup disk it's named `startup.lua`, so that it runs by itself when a computer without zOS boots with the disk inserted. Setup MUST load and check the whole image before changing anything on the computer.
+zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it's given, or the latest release. On a setup disk it's named `startup.lua`, so that it runs by itself when a computer without zOS boots with the disk inserted. Setup MUST load and check the whole image before changing anything on the computer. It then offers the modes below as a menu that works like the desktop's, with a description of the selected mode at the bottom of the screen.
 
 | Mode            | Result                                                         |
 | --------------- | -------------------------------------------------------------- |
@@ -136,7 +136,7 @@ zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it
 | Upgrade         | Stages the system as an update, keeps users, apps and settings |
 | Clean reinstall | Deletes all accounts, keys and settings, installs zOS          |
 
-The first boot creates the administrator after an install or clean reinstall. Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup replaces any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
+The first boot creates the administrator after an install or clean reinstall. Each thing it asks for has a label and a colon, with a `>` before the input on the next line. Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup replaces any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
 
 System files are distributed as a .zi image. See [ZI_FORMAT.md](formats/ZI_FORMAT.md).
 

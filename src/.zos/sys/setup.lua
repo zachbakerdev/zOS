@@ -14,7 +14,7 @@ local function askName()
         ui.text("Create an administrator account. It can manage users, apps and settings.")
         ui.text("")
         if why then ui.text(why, ui.theme.bad) ui.text("") end
-        local name = ui.input("Name")
+        local name = ui.field("Name")
         why = auth.badName(name)
         if not why then return name end
     end
@@ -27,10 +27,10 @@ local function askPassword(name)
         ui.text("Choose a password for " .. name .. ", at least " .. auth.MIN_PASSWORD .. " characters.")
         ui.text("")
         if why then ui.text(why, ui.theme.bad) ui.text("") end
-        local first = ui.input("Password", "*")
+        local first = ui.field("Password", "*")
         why = auth.badPassword(first)
         if not why then
-            local second = ui.input("Again", "*")
+            local second = ui.field("Again", "*")
             if first == second then return first end
             why = "Those didn't match."
         end
@@ -43,7 +43,7 @@ local password = askPassword(name)
 ui.screen(TITLE)
 ui.text("Name this computer, or press Enter to skip.")
 ui.text("")
-local label = ui.input("Label", nil, os.getComputerLabel())
+local label = ui.field("Label", nil, os.getComputerLabel())
 if label ~= "" then os.setComputerLabel(label) end
 
 ui.screen(TITLE)

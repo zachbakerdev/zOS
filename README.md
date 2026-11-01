@@ -58,6 +58,9 @@ To make a setup disk, copy `zos.zi` and `install.lua` to a floppy. Name the scri
 and a computer without zOS will run it when it boots with the disk inserted. Keep only one copy
 of the script, because two won't fit on a default floppy with the image.
 
+On a computer already running zOS, the optional **Setup Disk** app does all of this from the latest
+release.
+
 The image is fully checked before anything changes. Then, on a computer without zOS, the installer
 copies any `/startup` or `/startup.lua` to `/zos-backup/`, installs the system, **turns off disk
 boot**, ejects the disk and reboots. The first boot asks for an administrator account and a
@@ -144,6 +147,7 @@ folder under `apps/`.
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
+| [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy and writes the latest release's installer and image to it |
 
 ### Making app disks
 

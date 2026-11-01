@@ -39,6 +39,7 @@ Every screen has a title bar on line 1, and its content starts at column 2 of li
 | Method                            | Returns                                                     |
 | --------------------------------- | ----------------------------------------------------------- |
 | `ui.input(label, mask, default)`  | The line that was typed, or `""`                            |
+| `ui.field(label, mask, default)`  | As for `ui.input`, with `label:` on its own line above a `>` |
 | `ui.waitEnter(prompt)`            | Nothing. Waits for Enter                                    |
 | `ui.message(title, text, color)`  | Nothing. Shows text on its own screen until Enter is pressed |
 | `ui.confirm(question)`            | True for Y, and false for N or Backspace                    |

@@ -24,7 +24,8 @@ local INSTALLER = assert(readHost(os.getenv("ZOS_INSTALLER") or "install.lua"))
 
 local function norm(p) return (p:gsub("^/+", "")) end
 
--- A computer: `files` maps paths without a leading / to contents. `answers` are what's typed.
+-- A computer: `files` maps paths without a leading / to contents. `answers` are what's chosen in
+-- each menu: the number of an item, reached with the arrow keys, or a list of events.
 local function computer(files, answers)
   local c = { files = files, out = {}, reboots = 0, ejected = {}, settings = {}, urls = {}, freeSpace = 1000000 }
   local function under(p, k) return p == "" or k:sub(1, #p + 1) == p .. "/" end
@@ -87,9 +88,49 @@ local function computer(files, answers)
     }
   end
 
-  local next_answer = 0
+  local KEYS = { up = 200, down = 208, enter = 28, numPadEnter = 156 }
+  local queue, next_answer = {}, 0
+  local function pullEvent()
+    if #queue == 0 then
+      next_answer = next_answer + 1
+      local answer = answers and answers[next_answer]
+      if not answer then error("asked too many questions", 0) end
+      if type(answer) == "table" then
+        for _, event in ipairs(answer) do queue[#queue + 1] = event end
+      else
+        for _ = 2, answer do queue[#queue + 1] = { "key", KEYS.down } end
+        queue[#queue + 1] = { "key", KEYS.enter }
+      end
+    end
+    return table.unpack(table.remove(queue, 1))
+  end
+
+  local x, y = 1, 1
+  c.width, c.height, c.rows = 51, 19, {}
+  local term = {
+    getSize = function() return c.width, c.height end,
+    getCursorPos = function() return x, y end,
+    setCursorPos = function(a, b) x, y = a, b end,
+    setCursorBlink = function() end,
+    setTextColor = function() end,
+    setBackgroundColor = function() end,
+    clear = function() end,
+    clearLine = function() end,
+    scroll = function() end,
+    isColour = function() return true end,
+    write = function(text)
+      assert(x + #text - 1 <= c.width and y <= c.height, "drawn off the screen: " .. text)
+      c.out[#c.out + 1] = text
+      c.rows[text:match("^%s*(.-)%s*$")] = y
+      x = x + #text
+    end,
+  }
+
   c.env = setmetatable({
     fs = fs,
+    term = term,
+    keys = KEYS,
+    colors = setmetatable({}, { __index = function() return 1 end }),
     shell = {
       getRunningProgram = function() return c.program or "install.lua" end,
       resolve = function(p) return norm(p) end,
@@ -97,6 +138,7 @@ local function computer(files, answers)
     os = {
       getComputerID = function() return 7 end,
       reboot = function() c.reboots = c.reboots + 1 error("rebooted", 0) end,
+      pullEvent = pullEvent,
       pullEventRaw = function() end,
     },
     http = { get = function(url)
@@ -120,13 +162,6 @@ local function computer(files, answers)
       local ok, v = pcall(fn)
       return ok and v or nil
     end },
-    print = function(...) c.out[#c.out + 1] = table.concat({ ... }, " ") end,
-    printError = function(text) c.out[#c.out + 1] = text end,
-    write = function() end,
-    read = function()
-      next_answer = next_answer + 1
-      return answers and answers[next_answer] or error("asked too many questions", 0)
-    end,
     sleep = function() end,
   }, { __index = _G })
   return c
@@ -139,7 +174,7 @@ local function run(c, ...)
 end
 
 local function said(c, pattern)
-  return table.concat(c.out, "\n"):find(pattern) ~= nil
+  return table.concat(c.out, " "):find(pattern) ~= nil
 end
 
 local function quote(s) return string.format("%q", s) end
@@ -166,7 +201,7 @@ end
 -- A fresh install --------------------------------------------------------------------------------
 
 do
-  local c = computer(withImage({ ["startup.lua"] = "-- mine", ["startup"] = "-- also mine" }), { "1" })
+  local c = computer(withImage({ ["startup.lua"] = "-- mine", ["startup"] = "-- also mine" }), { 1 })
   check("install: runs", run(c))
   check("install: boot", c.files[".zos/boot.lua"] == "-- new boot")
   check("install: bootstrap", c.files["startup.lua"] == "-- new startup")
@@ -180,7 +215,7 @@ do
 end
 
 do
-  local c = computer(withImage({ ["startup.lua"] = "-- mine" }), { "2" })
+  local c = computer(withImage({ ["startup.lua"] = "-- mine" }), { 2 })
   run(c)
   check("cancel: nothing changed", c.files["startup.lua"] == "-- mine" and not c.env.fs.exists(".zos"))
   check("cancel: no reboot", c.reboots == 0)
@@ -189,7 +224,7 @@ end
 -- Sources ----------------------------------------------------------------------------------------
 
 do
-  local c = computer({}, { "1" })
+  local c = computer({}, { 1 })
   c.urls["https://github.com/zachbakerdev/zOS/releases/latest/download/zos.zi"] = imageText()
   c.program = "rom/programs/http/wget.lua"
   run(c)
@@ -197,15 +232,14 @@ do
 end
 
 do
-  local c = computer({})
+  local c = computer({}, { 1 })
   c.urls["https://example.com/z.zi"] = imageText()
-  c.env.read = function() return "1" end
   run(c, "https://example.com/z.zi")
   check("a URL works", c.files[".zos/boot.lua"] ~= nil)
 end
 
 do
-  local c = computer({ ["disk/zos.zi"] = imageText() }, { "1" })
+  local c = computer({ ["disk/zos.zi"] = imageText() }, { 1 })
   c.program = "disk/startup.lua"
   run(c)
   check("from a disk: installs", c.files[".zos/boot.lua"] ~= nil)
@@ -213,7 +247,7 @@ do
 end
 
 do
-  local c = computer({ ["my.zi"] = imageText() }, { "1" })
+  local c = computer({ ["my.zi"] = imageText() }, { 1 })
   run(c, "my.zi")
   check("a path works", c.files[".zos/boot.lua"] ~= nil)
   check("a local image ejects nothing", #c.ejected == 0)
@@ -273,7 +307,7 @@ do
 end
 
 do
-  local c = computer(withImage({ ["startup.lua"] = "-- mine" }), { "1" })
+  local c = computer(withImage({ ["startup.lua"] = "-- mine" }), { 1 })
   c.limit = function(p) return p:match("^%.zos%.install/boot") end
   run(c)
   check("short write: refused", said(c, "Couldn't write"))
@@ -308,7 +342,7 @@ do
   files["etc/zos/update/ready"] = "8.0.0"
   files["etc/zos/update/new/boot.lua"] = "-- a waiting update"
   files["etc/zos/update/failed"] = "9.0.0"
-  local c = computer(files, { "1" })
+  local c = computer(files, { 1 })
   check("upgrade: runs", run(c))
   local D = "etc/zos/update/"
   check("upgrade: staged", c.files[D .. "new/boot.lua"] == "-- new boot" and c.files[D .. "ready"] == "1.0.0")
@@ -322,7 +356,7 @@ do
 end
 
 do
-  local c = computer(withImage(installed()), { "1" })
+  local c = computer(withImage(installed()), { 1 })
   c.limit = function(p) return p == "etc/zos/update/startup.new" end
   run(c)
   check("upgrade short write: nothing staged", c.files["etc/zos/update/ready"] == nil and not c.env.fs.exists("etc/zos/update/new"))
@@ -330,7 +364,7 @@ do
 end
 
 do
-  local c = computer(withImage(installed()), { "2" })
+  local c = computer(withImage(installed()), { 2 })
   check("reinstall: runs", run(c))
   for _, name in ipairs({ "users.db", "LOCKOUT", "keys/a", "known_keys", "net/id", "config" }) do
     check("reinstall: deletes " .. name, c.files["etc/zos/" .. name] == nil)
@@ -347,14 +381,14 @@ end
 do
   local files = withImage(installed())
   files["startup"] = "-- something of mine"
-  local c = computer(files, { "2" })
+  local c = computer(files, { 2 })
   run(c)
   check("reinstall: a stray /startup is removed", c.files["startup"] == nil)
   check("reinstall: and backed up", c.files["zos-backup/startup"] == "-- something of mine")
 end
 
 do
-  local c = computer(withImage(installed()), { "3" })
+  local c = computer(withImage(installed()), { 3 })
   run(c)
   check("cancel when installed: unchanged", c.files["etc/zos/users.db"] == "{}" and c.reboots == 0)
 end
@@ -363,9 +397,10 @@ do
   local c = computer(withImage({
     ["startup.lua"] = "-- damaged",
     ["etc/zos/users.db"] = "{}",
-  }), { "9", "1" })
+  }), { 1 })
   run(c)
-  check("no system: only a reinstall is offered, and bad answers are asked again", c.files[".zos/boot.lua"] == "-- new boot")
+  check("no system: only a reinstall is offered", c.files[".zos/boot.lua"] == "-- new boot")
+  check("no system: can't upgrade", not said(c, "Upgrade"))
   check("no system: accounts deleted", c.files["etc/zos/users.db"] == nil)
   check("no system: backed up", c.files["zos-backup/startup.lua"] == "-- damaged")
 end
@@ -373,16 +408,63 @@ end
 do
   local files = installed()
   files[".zos/boot.lua"] = nil
-  local c = computer(withImage(files), { "1" })
+  local c = computer(withImage(files), { 1 })
   run(c)
   check("damaged system: reinstalled", c.files[".zos/boot.lua"] == "-- new boot" and c.files["etc/zos/users.db"] == nil)
+end
+
+-- The menu ---------------------------------------------------------------------------------------
+
+do
+  local c = computer(withImage(installed()), { 3 })
+  run(c)
+  check("menu: hint of the first item", said(c, "Keeps users, apps and settings"))
+  check("menu: hint of the item moved to", said(c, "Deletes all accounts"))
+end
+
+do
+  local c = computer(withImage(installed()), { 1 })
+  run(c)
+  check("menu: other items' hints aren't shown", not said(c, "Deletes all accounts"))
+end
+
+do
+  local c = computer(withImage(installed()), { { { "key", 200 }, { "key", 28 } } })
+  run(c)
+  check("menu: up wraps around to Cancel", c.reboots == 0 and said(c, "Cancelled"))
+end
+
+do
+  local c = computer(withImage(installed()), { { { "mouse_scroll", 1 }, { "mouse_scroll", 1 }, { "mouse_scroll", 1 }, { "key", 28 } } })
+  run(c)
+  check("menu: the scroll wheel stops at the end", c.reboots == 0 and said(c, "Cancelled"))
+end
+
+do
+  local c = computer(withImage(installed()), { { { "char", "2" }, { "mouse_click", 1, 2, 1 }, { "key", 28 } } })
+  run(c)
+  check("menu: ignores number keys and clicks outside it", c.files["etc/zos/update/ready"] == "1.0.0")
+end
+
+do
+  local probe = computer(withImage({}), { 2 })
+  run(probe)
+  local c = computer(withImage({ ["startup.lua"] = "-- mine" }), { { { "mouse_click", 1, 2, probe.rows["Cancel"] } } })
+  run(c)
+  check("menu: a click chooses", c.reboots == 0 and said(c, "Cancelled"))
+end
+
+do
+  local c = computer(withImage(installed()), { 2 })
+  c.width, c.height = 26, 20
+  check("menu: fits a pocket computer", run(c) and c.reboots == 1)
 end
 
 -- The real image, if it's been built -------------------------------------------------------------
 
 local real = readHost("dist/zos.zi")
 if real then
-  local c = computer(withImage({}, real), { "1" })
+  local c = computer(withImage({}, real), { 1 })
   check("real image: installs", run(c) and c.reboots == 1)
   check("real image: complete", c.files[".zos/sys/recovery.lua"] and c.files[".zos/apps/appman/app.manifest"])
 else

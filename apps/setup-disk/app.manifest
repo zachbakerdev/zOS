@@ -1,0 +1,7 @@
+{
+    name = "Setup Disk",
+    description = "Turn a floppy into a zOS setup disk",
+    version = "1.0.0",
+    author = "zOS",
+    priority = 80,
+}

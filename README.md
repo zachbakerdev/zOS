@@ -274,7 +274,8 @@ cancels once the text is empty. The list shows how many of each item there are, 
 once there's at least one, so `Iron Ingot x100 (1s+36)` is one stack and 36 more.
 
 After picking an item, type how many to recall: a number of items, such as `40`, or of stacks with an
-`s` after it, such as `2s`. Leave it empty to fill the I/O chest. Backspace goes back to the list. The
+`s` after it, such as `2s`. Leave it empty to fill the I/O chest. Backspace goes back to the list. If
+only one of the item is stored, it's recalled straight away without asking how many. The
 smallest stacks are taken first, so storage gets its slots back. The app moves the items until it has
 recalled that many, the I/O chest is full, or there are none left, and then goes back to the list with
 what it did written above it, so you can recall another item. The items stay in the I/O chest until you

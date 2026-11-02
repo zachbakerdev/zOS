@@ -207,6 +207,11 @@ local function pick(c, amount)
   key(c, "enter")
 end
 
+-- Pick the highlighted item when only one is stored, which recalls it without asking how many.
+local function pickOnly(c)
+  key(c, "enter")
+end
+
 -- First run ----------------------------------------------------------------------------------------
 
 -- The chest beside the computer is the default, when its contents show which network chest it is.
@@ -681,8 +686,10 @@ do
   screenHas(c, "1/2")
   check("nbt: found by display name", screenHas(c, "Named bbb x1"))
   check("nbt: only that one", not c.screenText():find("Named aaa", 1, true))
-  pick(c)
-  screenHas(c, "Recalled 1 Named bbb")
+  pickOnly(c)
+  check("only one: recalled without asking how many", screenHas(c, "Recalled 1 Named bbb.")
+    and not c.screenText():find("Amount:", 1, true))
+  check("only one: no note that it was all of them", not c.screenText():find("all there were", 1, true))
   check("nbt: moved the right one", io.slots[1].nbt == "bbb" and a.slots[1].nbt == "aaa")
 end
 
@@ -710,7 +717,7 @@ do
   typed(c, "mending")
   screenHas(c, "1/4")
   check("book: found by enchantment", screenHas(c, "Book: Mending, Unbreaking III"))
-  pick(c)
+  pickOnly(c)
   check("book: recalled", screenHas(c, "Recalled 1 Book: Mending, Unbreaking III."))
   check("book: the right one", total(io) == 1 and io.slots[1].nbt == "mu")
 end

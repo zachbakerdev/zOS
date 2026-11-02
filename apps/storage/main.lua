@@ -563,7 +563,12 @@ local function recall(config)
         repeat
             local item = chooseItem(stored, offline, status, statusColor)
             if not item then return end
-            amount = chooseAmount(item)
+            -- With only one stored there's nothing to choose, so skip straight to recalling it.
+            if item.count == 1 then
+                amount = nil
+            else
+                amount = chooseAmount(item)
+            end
             if amount ~= false then
                 status, statusColor = recallItem(config, item, amount)
                 if not status then return end

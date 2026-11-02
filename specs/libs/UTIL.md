@@ -38,6 +38,20 @@ Tables are stored with `textutils.serialize` in text mode, which can damage raw 
 
 It fails if the HTTP API is disabled. Set `binary` for anything that isn't plain text.
 
+## Progress
+
+| Method                                     | Returns                                                     |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| `util.part(onProgress, index, count, label)` | An `onProgress` for part `index` of `count` equal parts of a bigger job, or nil if `onProgress` is nil |
+
+`onProgress` functions take `(done, total, label)`. The one it returns reports to `onProgress`, so one bar can cover several steps. `label`, if given, replaces the part's own labels.
+
+```lua
+local progress = ui.loading()
+local channel = share.connect(peer, util.part(progress, 1, 2))
+local files = share.list(channel, util.part(progress, 2, 2))
+```
+
 ## Waiting
 
 | Method               | Returns                       |

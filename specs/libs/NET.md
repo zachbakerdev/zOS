@@ -115,6 +115,9 @@ Modems attached later are picked up automatically. `receive` returns nil on term
 | `root`     | With `expect`: the name MUST come from this root, by key                |
 | `key`      | Only send to a computer with this public key, in hex                    |
 | `timeout`  | `request` only: seconds to wait for the reply, after delivery. Default 5 |
+| `onProgress` | `request` only: called with `(done, total, label)` as the request moves on |
+
+`onProgress` is called in the caller's coroutine with `0/3 Connecting`, `1/3 Sending` and `2/3 Waiting for an answer`, then `3/3` once the reply is in, skipping any stage that isn't needed. It reports what has happened, not how long has gone by, so it stops at the stage the other computer stopped answering in. A retry can repeat a stage. `ui.loading` gives a bar that can be passed here.
 
 These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goes to the key that asked, on the session it asked on, so a computer claiming the same id can't collect the answer. It fails if that session has gone.
 
@@ -122,11 +125,11 @@ These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goe
 
 | Method                                         | Returns                                                   |
 | ---------------------------------------------- | --------------------------------------------------------- |
-| `net.resolve(host)`                            | `{ host, id, key, root }`                                 |
-| `net.requestHost(host, port, payload, opts)`   | `net.request` to whoever holds the hostname. Only `timeout` is used from `opts` |
+| `net.resolve(host, onProgress)`                | `{ host, id, key, root }`                                 |
+| `net.requestHost(host, port, payload, opts)`   | `net.request` to whoever holds the hostname. Only `timeout` and `onProgress` are used from `opts`, and the lookup is the first half of the progress |
 | `net.isHost(peer, host)`                       | Whether this peer holds the hostname                      |
 | `net.rootForTld(tld)`                          | The trusted root that owns a top-level domain             |
-| `net.tldOf(root)`                              | The top-level domain of a trusted root                    |
+| `net.tldOf(root, onProgress)`                  | The top-level domain of a trusted root                    |
 
 `requestHost` refuses to send to anyone but the holder of that hostname, with the key on its certificate, from the root that owns it. `tldOf` remembers the answer, so it only asks a root once. A root that can't be reached stops `rootForTld` finding a domain only if no other root owns it. A computer reaches its own hostname and its own root server like any other, as long as it trusts that root.
 
@@ -134,7 +137,7 @@ These calls block and ignore Ctrl+T, but each has a time limit. `reply` only goe
 
 | Method                         | Returns                                                                  |
 | ------------------------------ | ------------------------------------------------------------------------ |
-| `net.probe(port, timeout)`     | A list of `{ data, from }`, after `timeout` seconds, including this computer if it answers. Default 3 |
+| `net.probe(port, timeout, onProgress)` | A list of `{ data, from }`, after `timeout` seconds, including this computer if it answers. Default 3. `onProgress` is called twice a second, since this is a set wait |
 | `net.answerProbe(probe, data)` | Nothing. Answers a `net.PROBE_EVENT`, whose value is `{ port, nonce, from, side }` |
 
 Probes are how computers find each other before they know anything about each other, so they aren't encrypted or authenticated. Apps MUST treat what comes back as a claim, and MUST NOT put secrets in an answer. A computer only hears probes on ports it's listening on.
@@ -143,8 +146,8 @@ Probes are how computers find each other before they know anything about each ot
 
 | Method                                | Returns                                                                 |
 | ------------------------------------- | ----------------------------------------------------------------------- |
-| `net.findRoots(timeout)`              | Root servers in range, as `{ name, key, host, fingerprint }`            |
-| `net.addRoot(entry)`                  | True, or false and a reason. Trusts a root from `findRoots`, unless another trusted root owns its top-level domain or one that doesn't have a known domain can't be asked |
+| `net.findRoots(timeout, onProgress)`  | Root servers in range, as `{ name, key, host, fingerprint }`            |
+| `net.addRoot(entry, onProgress)`      | True, or false and a reason. Trusts a root from `findRoots`, unless another trusted root owns its top-level domain or one that doesn't have a known domain can't be asked |
 | `net.requestCertificate(root, name)`  | `"issued"`, `"pending"` or `"denied"`. Safe to repeat                   |
 
 Being listed by `findRoots` proves only that a server holds the key it shows, so a person MUST compare the fingerprint before it's trusted. Ordinary apps don't need these methods, because Settings handles them.

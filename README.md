@@ -131,6 +131,10 @@ opens a menu of every other app. The desktop also has **Settings**, for your pas
 keys, and **About** shows the version and free space. Admins also manage users, root servers,
 updates, secure boot and the computer label there.
 
+Apps show a loading bar wherever they wait, such as Mail sending a message or File Share connecting.
+The bar follows what has really happened, so if it stops, the other computer has stopped answering,
+and its label says what it's stuck on. The app carries on when that step answers or times out.
+
 ### Secure boot
 
 CraftOS normally runs a floppy's `startup` program on boot, which would let anyone skip the

@@ -281,7 +281,7 @@ do
   end)
   screenHas(c, "Erase it and make a setup disk?")
   char(c, "y")
-  check("dead root: says so", screenHas(c, "Gone"))
+  check("dead root: says so", screenHas(c, "didn't answer") and screenHas(c, "Gone"))
   key(c, "enter")
   screenHas(c, "[ ] Alpha")
   check("dead root: isn't offered", not c.screenText():find("Gone", 1, true))

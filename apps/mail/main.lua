@@ -4,6 +4,7 @@
 local session = ...
 local ui = require("ui")
 local client = require("mailclient")
+local util = require("util")
 
 local TITLE = "Mail"
 local MAX_QUOTE = 4096 -- leaves room in a message for the reply
@@ -22,11 +23,12 @@ local function dateText(ms)
     return os.date("!%Y-%m-%d %H:%M", math.floor(ms / 1000))
 end
 
--- Run something with a message on screen. Drops the account if the server no longer accepts it.
+-- Run something with a message and a loading bar on screen, passing it the function that moves the
+-- bar on. Drops the account if the server no longer accepts it.
 local function attempt(text, action)
     ui.screen(TITLE)
     ui.text(text, ui.theme.dim)
-    local answer, err, expired = action()
+    local answer, err, expired = action(ui.loading())
     if not answer then
         if expired then
             client.forget(session)
@@ -38,7 +40,9 @@ local function attempt(text, action)
 end
 
 local function call(op, fields)
-    return attempt("Talking to the server...", function() return client.call(account, op, fields) end)
+    return attempt("Talking to the server...", function(progress)
+        return client.call(account, op, fields, nil, progress)
+    end)
 end
 
 ------------------------------------------------------------------------------
@@ -67,7 +71,9 @@ local function compose(to, subject, quoted)
     ui.text("")
     if not ui.confirm("Send it?") then return end
     local body = table.concat(lines, "\n")
-    if attempt("Encrypting and sending...", function() return client.send(account, splitAddresses(to), subject, body) end) then
+    if attempt("Encrypting and sending...", function(progress)
+        return client.send(account, splitAddresses(to), subject, body, progress)
+    end) then
         ui.message(TITLE, "Sent. Mail that can't be delivered comes back to your inbox.", ui.theme.good)
     end
 end
@@ -85,13 +91,17 @@ end
 ------------------------------------------------------------------------------
 
 local function readMessage(entry)
-    local answer = call("read", { id = entry.id })
+    local answer = attempt("Opening the message...", function(progress)
+        local read, err, expired = client.call(account, "read", { id = entry.id }, nil, util.part(progress, 1, 2))
+        if read then
+            progress(1, 2, "Decrypting")
+            read.message.body = client.decrypt(account, read.message) or
+                "(This message can't be decrypted. It was encrypted with a key from before this account's password was reset.)"
+        end
+        return read, err, expired
+    end)
     if not answer then return end
     local message = answer.message
-    ui.screen(TITLE)
-    ui.text("Decrypting...", ui.theme.dim)
-    message.body = client.decrypt(account, message) or
-        "(This message can't be decrypted. It was encrypted with a key from before this account's password was reset.)"
     local text = "From: " .. message.from .. "\nTo: " .. table.concat(message.to, ", ") .. "\nDate: " ..
         dateText(message.date) .. "\nSubject: " .. message.subject .. "\n\n" .. message.body
     local action = ui.pager(TITLE .. " - " .. message.subject, text, "R: reply  D: delete  Q: back",
@@ -143,7 +153,7 @@ local function signInWith(heading, action)
     local entered, password = askCredentials(heading)
     if not entered then return end
     ui.text("Connecting...", ui.theme.dim)
-    local signedIn, err = action(session, entered, password)
+    local signedIn, err = action(session, entered, password, ui.loading())
     if signedIn then account = signedIn else fail(err) end
 end
 
@@ -152,7 +162,7 @@ local function changePassword()
     local old = ui.input("Current password", "*")
     local password = ui.input("New password", "*")
     ui.text("Changing the password...", ui.theme.dim)
-    local ok, err = client.changePassword(session, account, old, password)
+    local ok, err = client.changePassword(session, account, old, password, ui.loading())
     if ok then
         ui.message(TITLE, "Password changed. Other computers will have to sign in again.", ui.theme.good)
     else
@@ -161,7 +171,9 @@ local function changePassword()
 end
 
 local function downloadKey()
-    local file = attempt("Downloading your key...", function() return client.downloadCertificate(session, account) end)
+    local file = attempt("Downloading your key...", function(progress)
+        return client.downloadCertificate(session, account, progress)
+    end)
     if file then
         ui.message(TITLE, "Saved to " .. file .. ". It's locked with your current password.", ui.theme.good)
     end
@@ -169,7 +181,8 @@ end
 
 local function signOut()
     ui.screen(TITLE)
-    client.call(account, "logout")
+    ui.text("Signing out...", ui.theme.dim)
+    client.call(account, "logout", nil, nil, ui.loading())
     client.forget(session)
     account = nil
 end

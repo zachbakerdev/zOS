@@ -264,8 +264,8 @@ local function displayName(name, id)
 end
 
 -- Other computers in range, as { id, name }. None of this is proven; share.hello is what shows the key.
-function share.find(timeout)
-    local answers, err = net.probe(share.PORT, timeout)
+function share.find(timeout, onProgress)
+    local answers, err = net.probe(share.PORT, timeout, onProgress)
     if not answers then return nil, err end
     local found, known = {}, { [os.getComputerID()] = true } -- this computer answers its own probes
     for _, answer in ipairs(answers) do
@@ -280,8 +280,8 @@ function share.find(timeout)
 end
 
 -- Have a computer prove which key it holds. Returns { id, name, key, fingerprint, certified }.
-function share.hello(id)
-    local reply, err = net.request(id, share.PORT, { op = "hello" }, { timeout = OPEN_TIMEOUT })
+function share.hello(id, onProgress)
+    local reply, err = net.request(id, share.PORT, { op = "hello" }, { timeout = OPEN_TIMEOUT, onProgress = onProgress })
     if not reply then return nil, err end
     local peer = reply.peer
     return {
@@ -297,10 +297,10 @@ end
 -- Connecting and downloading
 ------------------------------------------------------------------------------
 
-local function connectChannel(channel)
+local function connectChannel(channel, onProgress)
     local sk, ephClient = crypto.keypair()
     local reply, err = net.request(channel.peer.id, share.PORT, { op = "open", eph = crypto.toHex(ephClient) },
-        { timeout = OPEN_TIMEOUT })
+        { timeout = OPEN_TIMEOUT, onProgress = onProgress })
     if not reply then return nil, err end
     if reply.peer.key ~= channel.peer.key then
         return nil, "This computer's fingerprint has changed. It may not be the computer you verified."
@@ -330,8 +330,8 @@ end
 
 -- Set up encryption with a trusted computer, from share.peers. Returns a channel for share.list
 -- and share.download, or nil and a reason.
-function share.connect(peer)
-    return connectChannel({ peer = peer })
+function share.connect(peer, onProgress)
+    return connectChannel({ peer = peer }, onProgress)
 end
 
 local function readAnswer(channel, seq, reply)
@@ -347,7 +347,7 @@ local function readAnswer(channel, seq, reply)
 end
 
 -- Run an operation on the other computer. An idle channel is replaced once if it has expired.
-local function call(channel, op, arg)
+local function call(channel, op, arg, onProgress)
     local lastErr
     local renewed = false
     local tries = 0
@@ -357,7 +357,7 @@ local function call(channel, op, arg)
         local seq = channel.seq
         local box = crypto.seal(channel.clientKey, seq .. "\n" .. op .. "\n" .. (arg or ""))
         local reply, err = net.request(channel.peer.id, share.PORT, { op = "call", cid = channel.id, box = box },
-            { timeout = CALL_TIMEOUT })
+            { timeout = CALL_TIMEOUT, onProgress = onProgress })
         if reply and type(reply.payload) == "table" and reply.payload.error and not renewed
                 and reply.peer.key == channel.peer.key then
             renewed = true
@@ -374,8 +374,8 @@ local function call(channel, op, arg)
 end
 
 -- The files a connected computer shares, as a list of { name, size }.
-function share.list(channel)
-    local body, err = call(channel, "list")
+function share.list(channel, onProgress)
+    local body, err = call(channel, "list", nil, onProgress)
     if not body then return nil, err end
     local out = {}
     for name, size in body:gmatch("([^\t\n]+)\t(%d+)") do

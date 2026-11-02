@@ -59,7 +59,9 @@ local function install(pkg)
     end
     if not ui.confirm(current and "Replace the installed version?" or "Install it?") then return end
 
-    local app, err = apps.install(pkg)
+    ui.screen(TITLE)
+    ui.text("Installing " .. m.name .. "...", ui.theme.dim)
+    local app, err = apps.install(pkg, ui.loading())
     if not app then
         return ui.message(TITLE, "Couldn't install " .. m.name .. ":\n\n" .. err, ui.theme.bad)
     end
@@ -133,6 +135,7 @@ local function fromWeb()
     local source = ui.input("URL or Pastebin code")
     if source == "" then return end
     ui.text("Downloading...", ui.theme.dim)
+    ui.loading()
     local pkg, err = apps.download(source)
     if not pkg then return ui.message(TITLE, err, ui.theme.bad) end
     install(pkg)
@@ -155,11 +158,15 @@ local function updateAll(updates)
     if not ui.confirm("Install " .. #updates .. " update(s)?") then return end
 
     local problems = {}
-    for _, entry in ipairs(updates) do
-        ui.text("Updating " .. entry.name .. "...", ui.theme.dim)
+    local progress = ui.loading()
+    for i, entry in ipairs(updates) do
+        progress(i - 1, #updates, "Downloading " .. entry.name)
         local pkg, err = update.downloadApp(entry)
         local app = pkg
-        if pkg then app, err = apps.install(pkg) end
+        if pkg then
+            progress(i - 0.5, #updates, "Installing " .. entry.name)
+            app, err = apps.install(pkg)
+        end
         if app then
             system.log(session.user .. " installed app " .. app.id .. " " .. app.version)
         else
@@ -173,6 +180,7 @@ end
 local function fromGitHub()
     ui.screen(TITLE)
     ui.text("Checking GitHub for apps...", ui.theme.dim)
+    ui.loading()
     local list, listErr = update.checkApps()
     if not list then return ui.message(TITLE, listErr, ui.theme.bad) end
 
@@ -205,6 +213,7 @@ local function fromGitHub()
     if not entry then return updateAll(updates) end
     ui.screen(TITLE)
     ui.text("Downloading " .. entry.name .. "...", ui.theme.dim)
+    ui.loading()
     local pkg, err = update.downloadApp(entry)
     if not pkg then return ui.message(TITLE, err, ui.theme.bad) end
     install(pkg)

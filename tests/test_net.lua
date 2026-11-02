@@ -216,6 +216,47 @@ do
   local none, why = sim.call(a, function() return a.net.request(3, 6000, "x", { timeout = 2 }) end)
   check("no reply", none, nil)
   check("no reply says why", has(tostring(why), "didn't reply"))
+
+  -- Progress follows what the other computer has done, so silence stops it.
+  local function requestSteps(id, port)
+    local steps = {}
+    local reply = sim.call(a, function()
+      return a.net.request(id, port, "x", { timeout = 2, onProgress = function(done, total, label)
+        steps[#steps + 1] = done .. "/" .. total .. (label and " " .. label or "")
+      end })
+    end, 60)
+    return reply, steps[#steps], steps
+  end
+
+  local _, last = requestSteps(3, 6000)
+  check("progress: a silent server stops it waiting", last, "2/3 Waiting for an answer")
+  _, last = requestSteps(77, 6000)
+  check("progress: nobody there stops it connecting", last, "0/3 Connecting")
+
+  c.net.listen(6001)
+  sim.spawn(c, function()
+    while true do
+      local msg = c.net.receive(6001)
+      if msg then c.net.reply(msg, "pong") end
+    end
+  end)
+  local reply, steps
+  reply, last, steps = requestSteps(3, 6001)
+  check("progress: the reply arrives", reply and reply.payload, "pong")
+  check("progress: finishes", last, "3/3")
+  check("progress: goes through each stage", has(table.concat(steps, ","), "1/3 Sending,2/3 Waiting for an answer,3/3"))
+
+  local quiet = 0
+  sim.call(a, function()
+    return a.net.request(3, 6001, "x", { onProgress = function() quiet = quiet + 1 end })
+  end)
+  check("progress: told only about what changed", quiet <= 3 + 1)
+
+  local ticks = {}
+  sim.call(a, function()
+    a.net.probe(6002, 2, function(done, total) ticks[#ticks + 1] = done .. "/" .. total end)
+  end)
+  check("progress: a probe counts its listening time", table.concat(ticks, " "), "1/4 2/4 3/4 4/4")
 end
 
 -- Attacks on the wire --------------------------------------------------------

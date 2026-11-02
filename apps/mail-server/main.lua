@@ -118,7 +118,7 @@ function acquireHostname()
     if not root then return end
     ui.screen(TITLE)
     ui.text("Asking " .. root.name .. " for its top-level domain...", ui.theme.dim)
-    local tld, err = net.tldOf(root)
+    local tld, err = net.tldOf(root, ui.loading())
     if not tld then return fail("Couldn't reach " .. root.name .. ":\n\n" .. tostring(err)) end
 
     local why

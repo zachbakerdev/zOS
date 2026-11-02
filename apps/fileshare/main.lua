@@ -8,6 +8,7 @@ local net = require("net")
 local share = require("share")
 local system = require("system")
 local trust = require("trust")
+local util = require("util")
 
 local TITLE = "File Share"
 local DOWNLOADS = "/home/" .. session.user .. "/downloads"
@@ -32,7 +33,7 @@ end
 local function verify(id)
     ui.screen(TITLE)
     ui.text("Asking computer " .. id .. " for its key...", ui.theme.dim)
-    local found, err = share.hello(id)
+    local found, err = share.hello(id, ui.loading())
     if not found then return fail("Couldn't reach computer " .. id .. ":\n\n" .. tostring(err)) end
     if share.isTrusted(found.key) then
         return ui.message(TITLE, found.name .. " is already verified.", ui.theme.good)
@@ -72,7 +73,7 @@ end
 local function addComputer()
     ui.screen(TITLE)
     ui.text("Looking for computers in range...", ui.theme.dim)
-    local found, err = share.find(3)
+    local found, err = share.find(3, ui.loading())
     if not found then return fail(err) end
 
     local items = {}
@@ -95,24 +96,19 @@ end
 -- Downloading
 ------------------------------------------------------------------------------
 
-local function drawProgress(file, got)
-    local w = term.getSize()
-    local width = w - 4
-    local filled = math.floor(width * (file.size > 0 and got / file.size or 1))
-    ui.at(2, 7, sizeText(got) .. " of " .. sizeText(file.size) .. "      ", ui.theme.dim, ui.theme.bg)
-    ui.at(2, 8, string.rep("=", filled) .. string.rep("-", width - filled), ui.theme.accent)
-end
-
 local function download(channel, file)
     ui.screen(TITLE .. " - " .. file.name)
     ui.text("Encrypted download from " .. channel.peer.name)
     ui.text("")
     ui.text("Backspace cancels.", ui.theme.dim)
-    drawProgress(file, 0)
+    ui.text("")
+    local progress = ui.loading("Asking for the file")
 
     local path, err
     parallel.waitForAny(function()
-        path, err = share.download(channel, file.name, DOWNLOADS, function(got) drawProgress(file, got) end)
+        path, err = share.download(channel, file.name, DOWNLOADS, function(got, size)
+            progress(got, size, sizeText(got) .. " of " .. sizeText(size))
+        end)
         if not path then err = err or "The download failed." end
     end, function()
         local key
@@ -132,12 +128,14 @@ end
 local function browse(peer)
     ui.screen(TITLE)
     ui.text("Setting up encryption with " .. peer.name .. "...", ui.theme.dim)
-    local channel, err = share.connect(peer)
+    local progress = ui.loading()
+    local channel, err = share.connect(peer, util.part(progress, 1, 2))
     if not channel then return fail(err) end
 
+    progress = util.part(progress, 2, 2)
     local selected = 1
     while true do
-        local files, why = share.list(channel)
+        local files, why = share.list(channel, progress)
         if not files then return fail(why) end
         local items = {}
         for _, file in ipairs(files) do
@@ -148,6 +146,9 @@ local function browse(peer)
         selected = ui.menu({ title = peer.name, items = items, selected = selected, back = true })
         if selected == nil or not files[selected] then return end
         download(channel, files[selected])
+        ui.screen(TITLE)
+        ui.text("Getting the list of files...", ui.theme.dim)
+        progress = ui.loading()
     end
 end
 

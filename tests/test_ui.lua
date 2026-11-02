@@ -410,6 +410,38 @@ for _, width in ipairs({ 51, 26 }) do
   draw(5, 9, 4)
   check("never overflows", rowOf(5) == " " .. string.rep("=", room) .. " 100%")
   check("without a label its row stays", rowOf(6) == " Half")
+
+  -- ui.loading
+  local function bar(share)
+    local full = math.floor(share * room)
+    return " " .. string.rep("=", full) .. string.rep("-", room - full) .. (" %3d%%"):format(share * 100)
+  end
+  sim.call(c, function() ui.screen("Bar") end)
+  c.env.term.setCursorPos(2, 5)
+  local move = sim.call(c, function() return ui.loading("Starting") end)
+  check("loading: starts empty", rowOf(5) == bar(0) and rowOf(6) == " Starting")
+  sim.call(c, function() move(1, 2) end)
+  check("loading: moves on and keeps its label", rowOf(5) == bar(0.5) and rowOf(6) == " Starting")
+  sim.call(c, function() move(1, 4, "Trying again") end)
+  check("loading: never goes back", rowOf(5) == bar(0.5) and rowOf(6) == " Trying again")
+  sim.call(c, function() move(0, 0) end)
+  check("loading: nothing to count changes nothing", rowOf(5) == bar(0.5))
+
+  local _, height = c.env.term.getSize()
+  sim.call(c, function() ui.screen("Bar") end)
+  c.env.term.setCursorPos(2, height)
+  sim.call(c, function() ui.loading("At the bottom") end)
+  check("loading: scrolls to fit its label",
+    rowOf(height - 1) == bar(0) and rowOf(height) == " At the bottom")
+
+  -- util.part
+  local util = c.env.require("util")
+  check("part: no progress, no function", util.part(nil, 1, 2) == nil)
+  local seen = {}
+  local function record(done, total, label) seen[#seen + 1] = done .. "/" .. total .. " " .. tostring(label) end
+  util.part(record, 1, 2)(1, 4, "Asking")
+  util.part(record, 2, 2, "Sending")(1, 2, "Ignored")
+  check("part: scales into the whole", table.concat(seen, ", ") == "0.25/2 Asking, 1.5/2 Sending")
 end
 
 scenario(51)

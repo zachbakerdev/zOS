@@ -668,8 +668,10 @@ local function stepJobs()
     for i = #jobs, 1, -1 do
         local job = jobs[i]
         if not job.done then
+            local state = job.state
             local ok, err = pcall(stepJob, job)
             if not ok then failJob(job, tostring(err)) end
+            if job.state ~= state then os.queueEvent(DONE) end -- so that run can report it
         end
         if job.done then table.remove(jobs, i) end
     end
@@ -713,6 +715,16 @@ local function worker()
     end
 end
 
+-- How far a request has got, as the stages it has finished and what it's doing now. These only
+-- change when the other computer answers, so a progress bar stops when it does.
+local STAGES = 3
+local STAGE = {
+    new = { 0, "Connecting" },
+    handshake = { 0, "Connecting" },
+    ack = { 1, "Sending" },
+    reply = { 2, "Waiting for an answer" },
+}
+
 -- Runs a job on the worker and waits for it. Each job has a time limit, so this always returns.
 local function run(job)
     if not running then return nil, "Networking isn't running." end
@@ -724,8 +736,19 @@ local function run(job)
     job.state = "new"
     jobs[#jobs + 1] = job
     wake()
-    while not job.done do os.pullEventRaw(DONE) end
-    if job.ok then return job.reply or true end
+    local onProgress = job.expectReply and job.opts.onProgress
+    local reported
+    while not job.done do
+        if onProgress and job.state ~= reported then
+            reported = job.state
+            onProgress(STAGE[reported][1], STAGES, STAGE[reported][2])
+        end
+        os.pullEventRaw(DONE)
+    end
+    if job.ok then
+        if onProgress then onProgress(STAGES, STAGES) end
+        return job.reply or true
+    end
     return nil, job.err
 end
 
@@ -807,13 +830,19 @@ end
 
 -- Discovery ------------------------------------------------------------------------------------
 
-function net.probe(port, timeout)
+function net.probe(port, timeout, onProgress)
     local nonce = toHex(crypto.randomBytes(8))
     local probe = { answers = {} }
     probes[nonce] = probe
     transmit(port, { t = "probe", nonce = nonce })
     if ports[port] then os.queueEvent(net.PROBE_EVENT, { port = port, nonce = nonce, from = myId }) end
-    util.wait(timeout or 3)
+    -- Listening takes a set time whoever answers, so this is the one wait that goes by the clock.
+    local seconds = timeout or 3
+    local steps = onProgress and math.ceil(seconds * 2) or 1
+    for i = 1, steps do
+        util.wait(seconds / steps)
+        if onProgress then onProgress(i, steps, "Listening for answers") end
+    end
     probes[nonce] = nil
     return probe.answers
 end
@@ -828,9 +857,9 @@ end
 
 -- Root servers and hostnames ------------------------------------------------------------------
 
-function net.findRoots(timeout)
+function net.findRoots(timeout, onProgress)
     local out, seenKeys = {}, {}
-    for _, answer in ipairs(net.probe(net.ROOT_PORT, timeout)) do
+    for _, answer in ipairs(net.probe(net.ROOT_PORT, timeout, onProgress)) do
         local advert = answer.data
         if trust.verifyAdvert(advert) and not seenKeys[advert.key] then
             seenKeys[advert.key] = true
@@ -867,9 +896,9 @@ function net.requestCertificate(root, name)
 end
 
 -- A trusted root's top-level domain, by asking it the first time.
-function net.tldOf(root)
+function net.tldOf(root, onProgress)
     if root.tld then return root.tld end
-    local reply, err = net.request(root.host, net.ROOT_PORT, { op = "zone" })
+    local reply, err = net.request(root.host, net.ROOT_PORT, { op = "zone" }, { onProgress = onProgress })
     if not reply then return nil, err end
     if not trust.verifyZone(reply.payload, root.key) then return nil, "The root server sent a bad zone." end
     trust.setRootTld(root.key, reply.payload.tld)
@@ -878,8 +907,8 @@ end
 
 -- Trust a root that has been checked by a person, as long as no other trusted root owns its
 -- top-level domain. Returns true, or false and a reason.
-function net.addRoot(entry)
-    local tld, err = net.tldOf(entry)
+function net.addRoot(entry, onProgress)
+    local tld, err = net.tldOf(entry, onProgress)
     if not tld then return false, "Couldn't get its top-level domain: " .. tostring(err) end
     for _, root in ipairs(trust.roots()) do
         if root.key ~= entry.key and not root.tld then
@@ -906,13 +935,13 @@ function net.rootForTld(tld)
     return nil, failure or ("No trusted root owns ." .. tld .. ".")
 end
 
-function net.resolve(host)
+function net.resolve(host, onProgress)
     local label, tld = trust.parseHost(host)
     if not label then return nil, tld end
     local root, err = net.rootForTld(tld)
     if not root then return nil, err end
     local reply
-    reply, err = net.request(root.host, net.ROOT_PORT, { op = "resolve", name = host })
+    reply, err = net.request(root.host, net.ROOT_PORT, { op = "resolve", name = host }, { onProgress = onProgress })
     if not reply then return nil, err end
     local cert = type(reply.payload) == "table" and reply.payload.cert
     if not cert then return nil, "There's no host called " .. host .. "." end
@@ -923,10 +952,12 @@ function net.resolve(host)
 end
 
 function net.requestHost(host, port, payload, opts)
-    local found, err = net.resolve(host)
+    local onProgress = opts and opts.onProgress
+    local found, err = net.resolve(host, util.part(onProgress, 1, 2, "Finding " .. tostring(host)))
     if not found then return nil, err end
     return net.request(found.id, port, payload, {
         key = found.key, expect = host, root = found.root, timeout = opts and opts.timeout,
+        onProgress = util.part(onProgress, 2, 2),
     })
 end
 

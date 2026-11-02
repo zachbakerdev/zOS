@@ -786,6 +786,22 @@ do
   send(c, bob, { "alice" }, "After", "new mail")
   local new = assert(op(c, alice, "read", { id = assert(op(c, alice, "list")).messages[1].id }))
   check("new mail reads", sim.call(c, function() return c.client.decrypt(alice, new.message) end), "new mail")
+
+  -- A send has a part for each recipient's key and one for the message.
+  local steps, backwards, last = {}, false, 0
+  local sent = sim.call(c, function()
+    return c.client.send(bob, { "alice" }, "Bar", "progress", function(done, total, label)
+      steps[#steps + 1] = tostring(label)
+      backwards = backwards or done / total < last
+      last = done / total
+    end)
+  end, 120)
+  check("send: sent with progress", sent ~= nil)
+  check("send: finishes the bar", last, 1)
+  local labels = table.concat(steps, ",")
+  check("send: says who it's looking up", has(labels, "Looking up alice@zmail.root-a"))
+  check("send: says when it's waiting", has(labels, "Waiting for an answer"))
+  check("send: only moves forward", backwards, false)
 end
 reset()
 

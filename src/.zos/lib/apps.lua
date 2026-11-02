@@ -173,7 +173,7 @@ end
 
 -- Changing apps --------------------------------------------------------------------------------
 
-function apps.install(pkg)
+function apps.install(pkg, onProgress)
     if not apps.supports(pkg.manifest.minZos) then
         return nil, pkg.manifest.name .. " needs zOS " .. pkg.manifest.minZos .. " or newer."
     end
@@ -185,12 +185,15 @@ function apps.install(pkg)
     -- Nothing here yields, so Ctrl+T can't stop it partway.
     local temp = apps.DIR .. "/.installing-" .. pkg.id
     fs.delete(temp)
+    local written = 0
     for path, data in pairs(pkg.files) do
         local ok, err = util.writeChecked(temp .. "/" .. path, data)
         if not ok then
             fs.delete(temp)
             return nil, "Couldn't write " .. path .. ": " .. tostring(err)
         end
+        written = written + 1
+        if onProgress then onProgress(written, pkg.count) end
     end
 
     services.stop(pkg.id)

@@ -61,8 +61,8 @@ function client.forget(session)
 end
 
 -- Send one request. Returns the answer, or nil, a reason and whether signing in again would help.
-local function call(host, payload, timeout)
-    local reply, err = net.requestHost(host, PORT, payload, { timeout = timeout or TIMEOUT })
+local function call(host, payload, timeout, onProgress)
+    local reply, err = net.requestHost(host, PORT, payload, { timeout = timeout or TIMEOUT, onProgress = onProgress })
     if not reply then return nil, "Couldn't reach " .. host .. ":\n\n" .. tostring(err) end
     local answer = reply.payload
     if type(answer) ~= "table" then return nil, host .. " sent a bad answer." end
@@ -78,12 +78,13 @@ local function unlock(certificate, password)
     if secret and #secret == 32 and crypto.publicKey(secret) == public then return secret, public end
 end
 
-local function signIn(session, op, address, password)
+local function signIn(session, op, address, password, onProgress)
     local user, host = client.parseAddress(address)
     if not user then return nil, host end
-    local answer, err = call(host, { op = op, user = user, password = password })
+    local answer, err = call(host, { op = op, user = user, password = password }, nil, util.part(onProgress, 1, 2))
     if not answer then return nil, err end
     if type(answer.token) ~= "string" then return nil, host .. " sent a bad answer." end
+    if onProgress then onProgress(1, 2, "Unlocking your key") end
     local secret, public = unlock(answer.certificate, password)
     if not secret then return nil, "Your key from " .. host .. " can't be decrypted with this password." end
     local account = { user = user, host = host, token = answer.token, secret = secret, public = public }
@@ -91,36 +92,39 @@ local function signIn(session, op, address, password)
     return account
 end
 
-function client.signIn(session, address, password)
-    return signIn(session, "login", address, password)
+function client.signIn(session, address, password, onProgress)
+    return signIn(session, "login", address, password, onProgress)
 end
 
-function client.signUp(session, address, password)
-    return signIn(session, "signup", address, password)
+function client.signUp(session, address, password, onProgress)
+    return signIn(session, "signup", address, password, onProgress)
 end
 
 -- Run an operation on the account's mail server.
-function client.call(account, op, fields, timeout)
+function client.call(account, op, fields, timeout, onProgress)
     local payload = fields or {}
     payload.op, payload.user, payload.token = op, account.user, account.token
-    return call(account.host, payload, timeout)
+    return call(account.host, payload, timeout, onProgress)
 end
 
--- Encrypt a message for each recipient and send it. Returns what client.call does.
-function client.send(account, to, subject, body)
+-- Encrypt a message for each recipient and send it. Returns what client.call does. Each lookup and
+-- the send itself are a part of onProgress, since the lookups can take as long as the send.
+function client.send(account, to, subject, body, onProgress)
     if type(body) ~= "string" then return nil, "That message is malformed." end
     if #body > MAX_BODY then return nil, "Messages are up to " .. MAX_BODY .. " bytes." end
     local key = crypto.randomBytes(32)
-    local addresses, keys = {}, {}
+    local addresses, keys, parts = {}, {}, #to + 1
     for i, address in ipairs(to) do
         if not address:find("@", 1, true) then address = address .. "@" .. account.host end
-        local answer, err, expired = client.call(account, "findKey", { address = address }, FIND_TIMEOUT)
+        local answer, err, expired = client.call(account, "findKey", { address = address }, FIND_TIMEOUT,
+            util.part(onProgress, i, parts, "Looking up " .. address))
         if not answer then return nil, err, expired end
         keys[address] = crypto.isHex(answer.key, 64) and crypto.sealTo(crypto.fromHex(answer.key), key) or nil
         if not keys[address] then return nil, account.host .. " sent a bad key for " .. address .. "." end
         addresses[i] = address
     end
-    return client.call(account, "send", { to = addresses, subject = subject, body = crypto.seal(key, body), keys = keys })
+    return client.call(account, "send", { to = addresses, subject = subject, body = crypto.seal(key, body), keys = keys },
+        nil, util.part(onProgress, parts, parts))
 end
 
 -- A message's body as text, or nil if this account's key doesn't open it. Mail comes from anyone
@@ -132,16 +136,16 @@ function client.decrypt(account, message)
 end
 
 -- Save the certificate, still locked with the password, in the user's home. Returns its path.
-function client.downloadCertificate(session, account)
-    local answer, err, expired = client.call(account, "certificate")
+function client.downloadCertificate(session, account, onProgress)
+    local answer, err, expired = client.call(account, "certificate", nil, nil, onProgress)
     if not answer then return nil, err, expired end
     local file = "/home/" .. session.user .. "/" .. account.user .. "@" .. account.host .. ".key"
     util.writeTable(file, answer.certificate)
     return file
 end
 
-function client.changePassword(session, account, old, new)
-    local answer, err = client.call(account, "password", { old = old, new = new })
+function client.changePassword(session, account, old, new, onProgress)
+    local answer, err = client.call(account, "password", { old = old, new = new }, nil, onProgress)
     if not answer then return nil, err end
     account.token = answer.token
     save(session, account)

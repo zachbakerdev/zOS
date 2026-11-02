@@ -69,6 +69,16 @@ function util.get(url, binary)
     return text
 end
 
+-- An onProgress(done, total, label) for part `index` of `count` equal parts of a bigger job, which
+-- reports to the job's own onProgress. label, if given, replaces the part's labels. Returns nil if
+-- onProgress is nil, so it can be passed straight on.
+function util.part(onProgress, index, count, label)
+    if not onProgress then return nil end
+    return function(done, total, text)
+        onProgress(index - 1 + done / total, count, label or text)
+    end
+end
+
 -- Wait for this many seconds. Unlike sleep, it ignores Ctrl+T.
 function util.wait(seconds)
     local timer = os.startTimer(seconds)

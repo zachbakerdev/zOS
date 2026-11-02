@@ -109,6 +109,27 @@ function ui.loadingBar(y, done, total, label)
     term.setCursorPos(x, cursorY)
 end
 
+-- Start a loading bar below the text on screen, scrolling to fit it and its label, and return the
+-- function that moves it on: move(done, total, label). A label stays until another replaces it. The
+-- bar never goes back, so a retry doesn't undo what the user saw. Nothing here moves it by itself:
+-- a bar that has stopped means the work has stopped.
+function ui.loading(label)
+    local _, height = term.getSize()
+    local _, row = term.getCursorPos()
+    if row >= height and term.scroll then
+        term.scroll(row + 1 - height)
+        row = height - 1
+        term.setCursorPos(2, row)
+    end
+    local reached = 0
+    local function move(done, total, text)
+        if total and total > 0 then reached = math.max(reached, done / total) end
+        ui.loadingBar(row, reached, 1, text)
+    end
+    move(0, 1, label)
+    return move
+end
+
 -- Ask for a line of text. mask hides what's typed. Returns "" if nothing was entered.
 function ui.input(label, mask, default)
     if label then

@@ -126,6 +126,9 @@ local function newTerm(computer)
   function t.setCursorPos(a, b) x, y = a, b end
   function t.clear() screen = {} end
   function t.clearLine() screen[y] = nil end
+  function t.scroll(n)
+    for i = 1, h do screen[i] = screen[i + n] end
+  end
   function t.write(s)
     local line = screen[y] or blank()
     screen[y] = (line:sub(1, x - 1) .. s .. line:sub(x + #s + 1)):sub(1, w)

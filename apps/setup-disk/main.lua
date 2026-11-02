@@ -96,10 +96,15 @@ local function rootsToOffer()
     end
 
     local trusted = trust.roots()
-    if #trusted > 0 then ui.text("Asking root servers for their zones...") end
-    for _, root in ipairs(trusted) do
+    local progress
+    if #trusted > 0 then
+        ui.text("Asking root servers for their zones...")
+        progress = ui.loading()
+    end
+    for i, root in ipairs(trusted) do
         if not seen[root.key] then
-            local reply = net.request(root.host, net.ROOT_PORT, { op = "zone" })
+            local reply = net.request(root.host, net.ROOT_PORT, { op = "zone" },
+                { onProgress = util.part(progress, i, #trusted, "Asking " .. root.name) })
             local zone = reply and reply.payload
             if type(zone) ~= "table" or zone.root ~= root.key or not offer(zone, root.name, root.host) then
                 missing[#missing + 1] = root.name
@@ -177,16 +182,17 @@ end
 
 -- The latest image and installer, checked, or nil and a reason. Both come from the same release,
 -- even if a new one is published in the meantime.
-local function download()
-    ui.text("Finding the latest release...")
+local function download(progress)
+    progress(0, 4, "Finding the latest release")
     local info, err = latestRelease()
     if not info then return nil, err end
     local base = update.RELEASES .. "download/v" .. info.version .. "/"
 
-    ui.text("Downloading zOS " .. info.version .. "...")
+    progress(1, 4, "Downloading zOS " .. info.version)
     local zi
     zi, err = util.get(base .. "zos.zi", true)
     if not zi then return nil, err end
+    progress(2, 4, "Checking zOS " .. info.version)
     if #zi ~= info.size then return nil, "The download is the wrong size." end
     if crypto.sha256(zi) ~= info.sha256 then return nil, "The download has changed." end
     local files
@@ -196,7 +202,7 @@ local function download()
         return nil, "The image isn't a complete system."
     end
 
-    ui.text("Downloading the installer...")
+    progress(3, 4, "Downloading the installer")
     local installer
     installer, err = util.get(base .. "install.lua", true)
     if not installer then return nil, err end
@@ -220,14 +226,16 @@ end
 
 -- The installer goes last: it's what makes the disk boot, and a disk with only an installer on it
 -- would quietly download zOS rather than use its own image.
-local function write(d, release)
+local function write(d, release, progress)
+    progress(0, 1, "Erasing the disk")
     for _, name in ipairs(fs.list(d.mount)) do
         fs.delete(fs.combine(d.mount, name))
     end
     local files = { { "zos.zi", release.zi } }
     if release.roots then files[#files + 1] = { "zos.zr", release.roots } end
     files[#files + 1] = { "startup.lua", release.installer }
-    for _, file in ipairs(files) do
+    for i, file in ipairs(files) do
+        progress(i - 1, #files, "Writing " .. file[1])
         local ok, why = util.writeChecked(fs.combine(d.mount, file[1]), file[2])
         if not ok then error("Couldn't write " .. file[1] .. ": " .. tostring(why), 0) end
     end
@@ -247,7 +255,9 @@ local function makeDisk(d)
     if roots == nil then return end
 
     ui.screen(TITLE)
-    local release, err = download()
+    ui.text("Making a setup disk...", ui.theme.dim)
+    local progress = ui.loading()
+    local release, err = download(util.part(progress, 1, 2))
     if not release then
         return ui.message(TITLE, "The download failed, so the disk wasn't erased.\n\n" .. err, ui.theme.bad)
     end
@@ -259,8 +269,7 @@ local function makeDisk(d)
     ok, err = fits(d, release)
     if not ok then return ui.message(TITLE, err .. " Nothing was erased.", ui.theme.bad) end
 
-    ui.text("Writing to the disk...")
-    ok, err = pcall(write, d, release)
+    ok, err = pcall(write, d, release, util.part(progress, 2, 2))
     if not ok then
         return ui.message(TITLE, "The disk was erased, but it isn't a setup disk.\n\n" .. tostring(err), ui.theme.bad)
     end

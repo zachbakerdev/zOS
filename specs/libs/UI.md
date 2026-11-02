@@ -84,16 +84,20 @@ local action = ui.pager("Message", text, "R: reply  Q: back", { r = "reply" })
 
 `ui.loadingBar(y, done, total, label)` draws a bar across row `y`, filled to `done` out of `total`, with the percentage at its end. `label`, if given, replaces row `y + 1`. Call it again with the same `y` to move the bar on. The cursor stays where it was.
 
-Nothing is drawn unless `total` is above 0, and a bar SHOULD only be shown for real work that can be counted, so that one never appears with nothing to load. The filled part is `=` and the rest is `-`, so it doesn't rely on colour.
+Nothing is drawn unless `total` is above 0, and a bar SHOULD only be shown for real work that can be counted, so that one never appears with nothing to load. `done` can be a fraction. The filled part is `=` and the rest is `-`, so it doesn't rely on colour.
+
+`ui.loading(label)` is the usual way in. It starts an empty bar at the cursor, scrolling if the bar and its label wouldn't fit, and returns the function that moves it on, `move(done, total, label)`. That function fits any `onProgress` in zOS, so it can be passed straight to `net.request`, `apps.install` and the rest. A label stays until another replaces it, and the bar never goes back, so a retry doesn't undo what the user saw. The cursor stays on the bar's row, so draw a new screen before writing more text.
 
 ```lua
 ui.text("Reading files...")
-local _, row = term.getCursorPos()
+local progress = ui.loading()
 for i, path in ipairs(paths) do
-    ui.loadingBar(row, i - 1, #paths, path)
+    progress(i - 1, #paths, path)
     read(path)
 end
 ```
+
+Anything that makes the user wait SHOULD show a bar, so the screen doesn't look frozen. A bar MUST only move when the work does, and MUST NOT be animated or moved by a timer: if a server stops answering, the bar stops too, and the label says what it's stuck on. The exceptions are waits that really are a set length, like `net.probe`. A wait with no end that the computer can measure, such as a person approving a request, SHOULD say what it's waiting for in text instead. Use `util.part` to fit several steps into one bar.
 
 ## Events
 

@@ -301,7 +301,7 @@ local function addRoot()
     if #net.modems() == 0 then return fail("There's no modem.\nAttach one and try again.") end
     ui.screen("Add root server")
     ui.text("Looking for root servers...", ui.theme.dim)
-    local found = net.findRoots(3)
+    local found = net.findRoots(3, ui.loading())
     if #found == 0 then return fail("No root servers answered. Check that this computer has a modem in range.") end
 
     local items = {}
@@ -321,7 +321,7 @@ local function addRoot()
     ui.text("")
     if not ui.confirm("Trust this root server?") then return end
     ui.text("Checking its top-level domain...", ui.theme.dim)
-    local ok, why = net.addRoot(entry)
+    local ok, why = net.addRoot(entry, ui.loading())
     if not ok then return fail(why) end
     system.log(session.user .. " added root server " .. entry.name)
     done("Added " .. entry.name .. ".")
@@ -395,19 +395,20 @@ local function updates()
             { label = "Check now", hint = "zOS " .. system.VERSION, action = function()
                 ui.screen("Updates")
                 ui.text("Checking...", ui.theme.dim)
+                ui.loading()
                 local info, err = update.check()
                 if info == nil then return fail(err) end
                 if info == false then return done("zOS " .. system.VERSION .. " is up to date.") end
+                ui.screen("Updates")
                 ui.text("zOS " .. info.version .. " is available.", ui.theme.accent)
                 if info.version == update.failedVersion() then
                     ui.text("This version failed to boot here before.", ui.theme.bad)
                 end
                 if not ui.confirm("Download it?") then return end
-                ui.text("Downloading...", ui.theme.dim)
-                local _, row = term.getCursorPos()
+                local progress = ui.loading("Downloading")
                 local ok
                 ok, err = update.download(info, function(stored, total)
-                    ui.loadingBar(row, stored, total, "Storing the update")
+                    progress(stored, total, "Storing the update")
                 end)
                 if not ok then return fail(err) end
                 done("It will install the next time this computer restarts.")

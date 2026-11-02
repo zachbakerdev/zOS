@@ -135,9 +135,9 @@ Returns whether `version` is a major.minor.patch version string.
 
 ## Changing apps
 
-### apps.install(pkg)
+### apps.install(pkg, onProgress)
 
-Installs a package from `apps.parse`, replacing any installed version, and returns the new app record.
+Installs a package from `apps.parse`, replacing any installed version, and returns the new app record. `onProgress(done, total)` is optional, and is called as step 2 writes each file.
 
 1. Refuses the package if this zOS is older than its `minZos`, or if the files don't fit in the free space.
 2. Writes every file to `/.zos/apps/.installing-<id>` and reads it back, so a full disk leaves the old version in place.

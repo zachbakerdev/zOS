@@ -5,6 +5,7 @@
 -- can reach the other. A chest beside the computer that also has its own wired modem shows up
 -- under both names, so it's used by its network name.
 
+local index = require("index")
 local util = require("util")
 
 local array = {}
@@ -102,6 +103,22 @@ function array.discover(onProgress)
     return usable, unlinked
 end
 
+-- Disk drives on a wired network, which any computer on it can use, sorted by name. Each has name,
+-- and label if its floppy has one; one without a floppy has empty set.
+function array.drives()
+    local found = {}
+    for name in pairs(reach()) do
+        if peripheral.hasType(name, "drive") then
+            local ok, hasData = pcall(disk.hasData, name)
+            local drive = { name = name, empty = not (ok and hasData) }
+            if not drive.empty then drive.label = disk.getLabel(name) end
+            found[#found + 1] = drive
+        end
+    end
+    table.sort(found, function(a, b) return a.name < b.name end)
+    return found
+end
+
 -- Whether items can move between two chests from discover.
 function array.connected(a, b)
     if not a.networks or not b.networks then return not a.networks and not b.networks end
@@ -162,54 +179,106 @@ local function readable(id)
     return (words:gsub("(%a)(%w*)", function(first, rest) return first:upper() .. rest end))
 end
 
-local displayNames = {} -- key -> name. Items with NBT can be renamed, so those are asked for once.
-
-local function displayName(chest, slot, item)
-    if not item.nbt then return readable(item.name) end
-    local key = keyOf(item)
-    if not displayNames[key] then
-        local detail = ask(chest, "getItemDetail", slot)
-        displayNames[key] = detail and detail.displayName or readable(item.name)
-    end
-    return displayNames[key]
+local function itemName(data, item)
+    return item.nbt and data.names[keyOf(item)] or readable(item.name)
 end
 
 -- Reading the array ------------------------------------------------------------------------------
 
--- Every allowed chest that answers, and how many didn't. Each chest has name, free and holds.
--- Items are (key -> { key, id, name, count, slots = { { chest, slot, count } } }).
--- onProgress(done, total, "chest") is called as each one is read, and not at all if there aren't any.
-local function scan(config, onProgress)
+local function allowedNames(config)
     local names = {}
     for name in pairs(config.allowed) do
         if name ~= config.io then names[#names + 1] = name end
     end
     table.sort(names)
+    return names
+end
 
-    local chests, items, offline = {}, {}, 0
+-- Read one chest into the index. Returns false, leaving what the index had, if it doesn't answer.
+-- Items with NBT can be renamed, so their names are asked for, but only once.
+local function readChest(data, name)
+    local contents, size = ask(name, "list"), ask(name, "size")
+    if not contents or not size then return false end
+    local chest = { size = size, slots = {} }
+    for slot, item in pairs(contents) do
+        chest.slots[slot] = { name = item.name, count = item.count, nbt = item.nbt }
+        local key = keyOf(item)
+        if item.nbt and not data.names[key] then
+            local detail = ask(name, "getItemDetail", slot)
+            data.names[key] = detail and detail.displayName or readable(item.name)
+        end
+    end
+    data.chests[name] = chest
+    return true
+end
+
+-- Read each of `names` into the state's index, counting those that don't answer as offline.
+local function readChests(state, names, onProgress)
     if onProgress and #names > 0 then onProgress(0, #names, "chest") end
     for i, name in ipairs(names) do
-        local contents, size = ask(name, "list"), ask(name, "size")
-        if contents and size then
-            local chest = { name = name, free = size, holds = {} }
+        if readChest(state.data, name) then
+            state.changed[name] = true
+        else
+            state.offline = state.offline + 1
+            state.answered[name] = nil
+        end
+        if onProgress then onProgress(i, #names, "chest") end
+    end
+end
+
+-- The storage chests as the index has them. Each chest has name, free and holds.
+-- Items are (key -> { key, id, name, count, slots = { { chest, slot, count } } }).
+local function view(state)
+    local chests, items = {}, {}
+    for _, name in ipairs(state.names) do
+        local saved = state.answered[name] and state.data.chests[name]
+        if saved then
+            local chest = { name = name, free = saved.size, holds = {} }
             chests[#chests + 1] = chest
-            for _, slot in ipairs(sortedSlots(contents)) do
-                local item = contents[slot]
+            for _, slot in ipairs(sortedSlots(saved.slots)) do
+                local item = saved.slots[slot]
                 local key = keyOf(item)
                 chest.free = chest.free - 1
                 chest.holds[key] = true
                 items[key] = items[key] or {
-                    key = key, id = item.name, name = displayName(name, slot, item), count = 0, slots = {},
+                    key = key, id = item.name, name = itemName(state.data, item), count = 0, slots = {},
                 }
                 items[key].count = items[key].count + item.count
                 table.insert(items[key].slots, { chest = name, slot = slot, count = item.count })
             end
-        else
-            offline = offline + 1
         end
-        if onProgress then onProgress(i, #names, "chest") end
     end
-    return chests, items, offline
+    return chests, items
+end
+
+-- The index, with every allowed chest that's connected in it. Only chests it doesn't have yet are
+-- read. A chest that isn't connected counts as offline and is left out, but the index keeps it.
+-- onProgress(done, total, "chest") is called as each one is read, and not at all if none are.
+local function open(config, onProgress)
+    local data, err = index.load(config)
+    local state = {
+        config = config, data = data, err = err, changed = {}, offline = 0,
+        names = allowedNames(config), answered = {},
+    }
+    local unread = {}
+    for _, name in ipairs(state.names) do
+        if peripheral.isPresent(name) then
+            state.answered[name] = true
+            if not data.chests[name] then unread[#unread + 1] = name end
+        else
+            state.offline = state.offline + 1
+        end
+    end
+    readChests(state, unread, onProgress)
+    return state
+end
+
+-- Save what changed. Returns why it couldn't be, or nil.
+local function close(state)
+    if state.err then return state.err end
+    if not next(state.changed) then return nil end
+    local ok, err = index.save(state.config, state.data, state.changed)
+    if not ok then return err end
 end
 
 local function byName(a, b)
@@ -217,14 +286,53 @@ local function byName(a, b)
     return a.key < b.key
 end
 
--- Everything in storage, sorted by name, and how many chests didn't answer.
+-- Everything in storage, sorted by name, how many chests didn't answer, and why the index couldn't
+-- be saved, if it couldn't.
 function array.items(config, onProgress)
-    local _, items, offline = scan(config, onProgress)
+    local state = open(config, onProgress)
+    local _, items = view(state)
     local found = {}
     for _, item in pairs(items) do found[#found + 1] = item end
     table.sort(found, byName)
-    return found, offline
+    return found, state.offline, close(state)
 end
+
+-- Forget what the index has for `names`, so that they're read again next time.
+function array.forget(config, names)
+    local data = index.load(config)
+    local changed = {}
+    for _, name in ipairs(names) do
+        data.chests[name], changed[name] = nil, true
+    end
+    if next(changed) then index.save(config, data, changed) end
+end
+
+-- Read every allowed chest again, and replace the index with what they hold. Returns
+-- { chests, items, offline, indexError }, where chests is how many were read and items how many they hold.
+-- onProgress is called as for array.items.
+function array.rebuild(config, onProgress)
+    local state = {
+        config = config, data = { chests = {}, names = {} }, changed = {}, offline = 0,
+        names = allowedNames(config), answered = {},
+    }
+    readChests(state, state.names, onProgress)
+    local chests, items = 0, 0
+    for _, chest in pairs(state.data.chests) do
+        chests = chests + 1
+        for _, item in pairs(chest.slots) do items = items + item.count end
+    end
+    local ok, err = index.save(config, state.data)
+    return { chests = chests, items = items, offline = state.offline, indexError = not ok and err or nil }
+end
+
+-- Why the index can't be used, or nil if it can.
+function array.indexProblem(config)
+    local _, err = index.path(config)
+    return err
+end
+
+-- Delete the index kept on this computer.
+array.deleteLocalIndex = index.deleteLocal
 
 local function startsWord(text, at)
     return at == 1 or not text:sub(at - 1, at - 1):find("%w")
@@ -277,8 +385,9 @@ end
 
 -- Moving items -----------------------------------------------------------------------------------
 
--- Move as much of a slot as `chest` takes, and return how many moved.
-local function pushTo(chest, from, slot, limit)
+-- Move as much of a slot as `chest` takes, and return how many moved. `touched` gets its name.
+local function pushTo(touched, chest, from, slot, limit)
+    touched[chest.name] = true
     local moved = ask(from, "pushItems", chest.name, slot, limit)
     if moved == nil then -- it has gone, so nothing else should try it
         chest.free, chest.holds = 0, {}
@@ -288,16 +397,16 @@ local function pushTo(chest, from, slot, limit)
 end
 
 -- Move a slot into the array, joining stacks of the same item first. Returns how many moved.
-local function pushToArray(chests, from, slot, key, count)
+local function pushToArray(touched, chests, from, slot, key, count)
     local left = count
     for _, chest in ipairs(chests) do
         if left == 0 then break end
-        if chest.holds[key] then left = left - pushTo(chest, from, slot, left) end
+        if chest.holds[key] then left = left - pushTo(touched, chest, from, slot, left) end
     end
     for _, chest in ipairs(chests) do
         if left == 0 then break end
         if not chest.holds[key] and chest.free > 0 then
-            local moved = pushTo(chest, from, slot, left)
+            local moved = pushTo(touched, chest, from, slot, left)
             if moved > 0 then
                 -- One stack from one slot takes up exactly one new slot.
                 chest.free, chest.holds[key] = chest.free - 1, true
@@ -309,19 +418,21 @@ local function pushToArray(chests, from, slot, key, count)
 end
 
 -- Move the I/O chest's items into the array: all of them, or at most `limit` of the item `key`.
--- Returns { moved, left, offline }, where left didn't fit, or nil if the I/O chest has gone.
--- onProgress is called as for scan, and then with (done, total, "stack") as each stack is moved.
+-- Returns { moved, left, offline, indexError }, where left didn't fit, or nil if the I/O chest has gone.
+-- onProgress is called as for array.items, and then with (done, total, "stack") as each stack is moved.
+-- The chests it moved items into are read again afterwards, since only they know which slots they used.
 function array.store(config, key, limit, onProgress)
     local contents = ask(config.io, "list")
     if not contents then return nil end
-    local chests, _, offline = scan(config, onProgress)
+    local state = open(config, onProgress)
+    local chests = view(state)
 
     local slots = {}
     for _, slot in ipairs(sortedSlots(contents)) do
         if not key or keyOf(contents[slot]) == key then slots[#slots + 1] = slot end
     end
 
-    local moved, wanted = 0, 0
+    local moved, wanted, touched = 0, 0, {}
     if onProgress and #slots > 0 then onProgress(0, #slots, "stack") end
     for i, slot in ipairs(slots) do
         local item = contents[slot]
@@ -329,20 +440,33 @@ function array.store(config, key, limit, onProgress)
         if limit then count = math.min(count, limit - wanted) end
         if count > 0 then
             wanted = wanted + count
-            moved = moved + pushToArray(chests, config.io, slot, keyOf(item), count)
+            moved = moved + pushToArray(touched, chests, config.io, slot, keyOf(item), count)
         end
         if onProgress then onProgress(i, #slots, "stack") end
     end
-    return { moved = moved, left = wanted - moved, offline = offline }
+
+    for name in pairs(touched) do
+        if readChest(state.data, name) then state.changed[name] = true end
+    end
+    return { moved = moved, left = wanted - moved, offline = state.offline, indexError = close(state) }
 end
 
--- Move as many of the item `key` as fit into the I/O chest. Returns { moved, left, offline }, where
--- left stayed in the array, or nil if the I/O chest has gone. onProgress is called as for array.store.
+-- Move as many of the item `key` as fit into the I/O chest. Returns { moved, left, offline, indexError },
+-- where left stayed in the array, or nil if the I/O chest has gone. onProgress is called as for
+-- array.store. The chests the index says hold it are read first, in case it's out of date.
 function array.recall(config, key, onProgress)
     if not ask(config.io, "size") then return nil end
-    local _, items, offline = scan(config, onProgress)
+    local state = open(config, onProgress)
+    local _, items = view(state)
+    local holders, seen = {}, {}
+    for _, place in ipairs(items[key] and items[key].slots or {}) do
+        if not seen[place.chest] then holders[#holders + 1], seen[place.chest] = place.chest, true end
+    end
+    readChests(state, holders, onProgress)
+
+    _, items = view(state)
     local item = items[key]
-    if not item then return { moved = 0, left = 0, offline = offline } end
+    if not item then return { moved = 0, left = 0, offline = state.offline, indexError = close(state) } end
 
     local moved = 0
     if onProgress then onProgress(0, #item.slots, "stack") end
@@ -350,11 +474,15 @@ function array.recall(config, key, onProgress)
         local count = ask(place.chest, "pushItems", config.io, place.slot)
         if count then
             moved = moved + count
+            local slots = state.data.chests[place.chest].slots
+            slots[place.slot].count = place.count - count
+            if count >= place.count then slots[place.slot] = nil end
+            state.changed[place.chest] = true
             if count < place.count then break end -- the I/O chest is full
         end
         if onProgress then onProgress(i, #item.slots, "stack") end
     end
-    return { moved = moved, left = item.count - moved, offline = offline }
+    return { moved = moved, left = item.count - moved, offline = state.offline, indexError = close(state) }
 end
 
 return array

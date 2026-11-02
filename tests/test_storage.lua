@@ -99,18 +99,30 @@ local function fakePeripherals(env, world)
     return moved
   end
 
+  -- Disk drives on the network: name -> { mount, label }, with no mount for one without a floppy.
+  env.disk = {
+    hasData = function(name) return world.drives[name] ~= nil and world.drives[name].mount ~= nil end,
+    getMountPath = function(name) return world.drives[name] and world.drives[name].mount end,
+    getLabel = function(name) return world.drives[name] and world.drives[name].label end,
+  }
+
   env.peripheral = setmetatable({
     getNames = function()
       local names = real.getNames()
       names[#names + 1] = world.modem
       for name in pairs(world.sides) do names[#names + 1] = name end
       for name in pairs(world.net) do names[#names + 1] = name end
+      for name in pairs(world.drives) do names[#names + 1] = name end
       table.sort(names)
       return names
+    end,
+    isPresent = function(name)
+      return not world.gone[name] and (world.sides[name] or world.net[name] or world.drives[name]) ~= nil
     end,
     getType = function(name) return world.net[name] and name or "minecraft:chest" end,
     hasType = function(name, kind)
       if world.modem == name or name == "top" then return kind == "modem" end
+      if world.drives[name] then return kind == "drive" end
       return kind == "inventory" and (world.sides[name] or world.net[name]) ~= nil
     end,
     call = function(name, method, ...)
@@ -119,11 +131,13 @@ local function fakePeripherals(env, world)
       if method == "getNamesRemote" then
         local names = {}
         for remote in pairs(world.net) do names[#names + 1] = remote end
+        for remote in pairs(world.drives) do names[#names + 1] = remote end
         table.sort(names)
         return names
       end
       if method == "size" then return chestOf(name).size end
       if method == "list" then
+        world.lists = (world.lists or 0) + 1
         local out = {}
         for slot, item in pairs(chestOf(name).slots) do out[slot] = sim.copy(item) end
         return out
@@ -143,6 +157,7 @@ end
 local function start(world, files)
   for _, other in pairs(sim.computers) do sim.powerOff(other) end
   world.net, world.sides, world.gone, world.calls = world.net or {}, world.sides or {}, world.gone or {}, 0
+  world.drives = world.drives or {}
   world.modem = world.modem or "back"
   local c = sim.computer(1, { files = files or {} })
   c.appDir = "apps/storage/"
@@ -189,7 +204,7 @@ do
   check("first run: defaults to the chest beside it", screenHas(c, "I/O chest: minecraft:chest_1"))
   check("first run: counts chests, not furnaces or itself", screenHas(c, "Storage chests: 1"))
   check("first run: saves nothing until asked", files[CONFIG] == nil)
-  key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "home") key(c, "up") key(c, "enter")
   check("first run: moves on", screenHas(c, "Store all"))
   local cfg = config(c)
   check("first run: saves the chest", cfg.io == "minecraft:chest_1")
@@ -216,7 +231,7 @@ do
   check("no modem: says what to do", screenHas(c, "Put a wired modem on the"))
   key(c, "enter")
   check("no modem: nothing chosen", screenHas(c, "I/O chest: not set"))
-  key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "home") key(c, "up") key(c, "enter")
   check("no modem: can't save without an I/O chest", screenHas(c, "Choose an I/O chest first"))
 end
 
@@ -253,7 +268,7 @@ do
   check("toggle: turns one off", screenHas(c, "[ ] chest0"))
   key(c, "backspace")
   check("toggle: counted", screenHas(c, "Storage chests: 1"))
-  key(c, "down") key(c, "enter")
+  key(c, "home") key(c, "up") key(c, "enter")
   screenHas(c, "Store all")
   check("toggle: saved", not config(c).allowed.chest0 and config(c).allowed.chest2)
 end
@@ -286,7 +301,7 @@ do
   local left, right = chest(27, { { "x:a", 4 } }), chest(27)
   local c = start({ sides = { left = left, right = right } })
   screenHas(c, "I/O chest: left")
-  key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "home") key(c, "up") key(c, "enter")
   screenHas(c, "Store all")
   key(c, "enter")
   check("sides: stores", screenHas(c, "Stored 4 items"))
@@ -689,6 +704,258 @@ do
   recallFirst(c, "secret")
   check("not allowed: not searched", screenHas(c, "Nothing matches that"))
   check("not allowed: untouched", total(other) == 9)
+end
+
+-- The item index ------------------------------------------------------------------------------------
+
+local INDEX = "etc/storage/index"
+
+local function settings(c)
+  screenHas(c, "Store all")
+  key(c, "home") key(c, "down") key(c, "down") key(c, "enter")
+  screenHas(c, "Item index:")
+end
+
+local function menuTo(c, label)
+  for _ = 1, 10 do
+    local row = rowOf(c, label)
+    if row then
+      c.env.os.queueEvent("mouse_click", 1, 2, row)
+      return
+    end
+    sim.advance(1)
+  end
+  error("no " .. label .. " on screen:\n" .. c.screenText())
+end
+
+local function backToMenu(c)
+  sim.advance(1)
+  key(c, "enter")
+  screenHas(c, "Store all")
+end
+
+-- The chests are read once, and after that the index answers.
+do
+  local a = chest(27, { { "x:a", 5 } })
+  local c, world = ready(chest(27), a, chest(27, { { "x:b", 2 } }))
+  recallFirst(c, "")
+  screenHas(c, "A x5")
+  check("index: saved after the first read", c.files[INDEX] ~= nil)
+  local lists = world.lists
+  key(c, "backspace")
+  recallFirst(c, "")
+  screenHas(c, "B x2")
+  check("index: not read again", world.lists == lists)
+end
+
+-- Storing and recalling keep it up to date, reading only the chests they touched.
+do
+  local io = chest(27, { { "x:new", 7 } })
+  local a, b = chest(27, { { "x:a", 5 } }), chest(27, { { "x:b", 1 } })
+  local c, world = ready(io, a, b)
+  recallFirst(c, "")
+  screenHas(c, "A x5")
+  key(c, "backspace")
+  screenHas(c, "Store all")
+  local lists = world.lists
+  key(c, "home") key(c, "enter")
+  screenHas(c, "Stored 7 items")
+  check("index: store reads the I/O chest and where it put them", world.lists - lists == 2)
+  backToMenu(c)
+  lists = world.lists
+  recallFirst(c, "new")
+  check("index: knows what was stored", screenHas(c, "New x7"))
+  check("index: without reading", world.lists == lists)
+  key(c, "enter")
+  screenHas(c, "Recalled 7 New")
+  check("index: recall checks the chest that holds it", world.lists - lists == 1)
+  io.slots = {}
+  key(c, "enter")
+  screenHas(c, "Stored 0 items")
+  backToMenu(c)
+  recallFirst(c, "new")
+  check("index: knows it was taken", screenHas(c, "Nothing matches that"))
+end
+
+-- Recalling checks the chests first, so a chest changed by hand can't send the wrong item.
+do
+  local io = chest(27)
+  local a = chest(27, { { "x:a", 10 }, { "x:a", 10 } })
+  local c = ready(io, a, chest(27))
+  recallFirst(c, "")
+  screenHas(c, "A x20")
+  key(c, "backspace")
+  a.slots[1] = { name = "x:z", count = 3 }
+  recallFirst(c, "a")
+  screenHas(c, "A x20")
+  key(c, "enter")
+  check("stale: recalls what's really there", screenHas(c, "Recalled 10 A."))
+  check("stale: only that item", total(io, "x:a") == 10 and total(io, "x:z") == 0)
+  key(c, "enter")
+  backToMenu(c)
+  recallFirst(c, "z")
+  check("stale: the index is corrected", screenHas(c, "Z x3"))
+end
+
+-- Rebuilding finds what was changed by hand.
+do
+  local a = chest(27, { { "x:a", 1 } })
+  local c, world = ready(chest(27), a, chest(27))
+  recallFirst(c, "")
+  screenHas(c, "A x1")
+  key(c, "backspace")
+  a.slots[2] = { name = "x:hand", count = 4 }
+  recallFirst(c, "hand")
+  check("rebuild: not seen before", screenHas(c, "Nothing matches that"))
+  key(c, "backspace") key(c, "backspace") key(c, "backspace") key(c, "backspace") key(c, "backspace")
+  settings(c)
+  menuTo(c, "Rebuild item index")
+  check("rebuild: reports", screenHas(c, "Counted 5 items in 2 chests."))
+  key(c, "enter")
+  check("rebuild: back to settings", screenHas(c, "Rebuild item index"))
+  key(c, "backspace")
+  local lists = world.lists
+  recallFirst(c, "hand")
+  check("rebuild: found", screenHas(c, "Hand x4"))
+  check("rebuild: kept", world.lists == lists)
+end
+
+do
+  local c = start({ net = { io = chest(27), a = chest(27) } })
+  screenHas(c, "Storage - Setup")
+  check("rebuild: not offered before setup", not c.screenText():find("Rebuild", 1, true))
+  check("index: here by default", screenHas(c, "Item index: this computer"))
+end
+
+-- A chest that's ticked again is read again, since it may have changed while it wasn't.
+do
+  local b = chest(27, { { "x:b", 1 } })
+  local c = ready(chest(27), chest(27), b)
+  recallFirst(c, "")
+  screenHas(c, "B x1")
+  key(c, "backspace")
+  local function toggleB()
+    settings(c)
+    key(c, "home") key(c, "down") key(c, "enter")
+    screenHas(c, "] b")
+    menuTo(c, "] b")
+    sim.advance(1)
+    key(c, "backspace")
+    key(c, "home") key(c, "up") key(c, "enter")
+    screenHas(c, "Store all")
+  end
+  toggleB()
+  b.slots[1] = { name = "x:changed", count = 2 }
+  toggleB()
+  check("re-ticked: saved", config(c).allowed.b)
+  recallFirst(c, "")
+  check("re-ticked: read again", screenHas(c, "Changed x2"))
+end
+
+-- On a network drive -------------------------------------------------------------------------------
+
+local SHARED = "disk/storage/index"
+
+do
+  local world = { net = { io = chest(27), a = chest(27, { { "x:a", 3 } }) }, drives = { drive_0 = { mount = "disk", label = "Index" } } }
+  local c = start(world)
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true } })
+  settings(c)
+  check("drive: shown", screenHas(c, "Item index: this computer"))
+  menuTo(c, "Item index")
+  check("drive: listed", screenHas(c, 'drive_0 "Index"'))
+  menuTo(c, "drive_0")
+  check("drive: chosen", screenHas(c, "Item index: network drive drive_0"))
+  key(c, "home") key(c, "up") key(c, "enter")
+  screenHas(c, "Store all")
+  check("drive: saved", config(c).index.drive == "drive_0")
+  recallFirst(c, "")
+  screenHas(c, "A x3")
+  check("drive: index on the floppy", c.files[SHARED] ~= nil and c.files[INDEX] == nil)
+
+  -- Another computer with the same chests and drive uses it without reading them.
+  local shared = c.files[SHARED]
+  local c2 = start(world, { [SHARED] = shared })
+  c2.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true }, index = { drive = "drive_0" } })
+  world.lists = 0
+  recallFirst(c2, "")
+  check("drive: shared", screenHas(c2, "A x3"))
+  check("drive: nothing read", world.lists == 0)
+end
+
+do
+  local world = { net = { io = chest(27), a = chest(27) }, drives = { drive_0 = {} } }
+  local c = start(world)
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true } })
+  settings(c)
+  menuTo(c, "Item index")
+  menuTo(c, "drive_0")
+  check("drive: needs a floppy", screenHas(c, "There's no floppy in drive_0"))
+  key(c, "enter")
+  key(c, "backspace")
+  check("drive: still here", screenHas(c, "Item index: this computer"))
+end
+
+do
+  local c = start({ net = { io = chest(27), a = chest(27) } })
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true } })
+  settings(c)
+  menuTo(c, "Item index")
+  check("drive: says how when there are none", screenHas(c, "Look for network drives"))
+end
+
+-- Without its drive, it still works, and says the index wasn't saved.
+do
+  local io = chest(27, { { "x:a", 2 } })
+  local c = ready(io, chest(27), chest(27))
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true, b = true }, index = { drive = "drive_9" } })
+  screenHas(c, "Store all")
+  key(c, "home") key(c, "enter")
+  check("drive gone: stores", screenHas(c, "Stored 2 items"))
+  check("drive gone: says so", screenHas(c, "The item index wasn't saved: The network drive") and screenHas(c, "drive_9 isn't connected"))
+end
+
+-- Moving back to this computer throws away its old copy, which missed what happened meanwhile.
+do
+  local world = { net = { io = chest(27), a = chest(27) }, drives = { drive_0 = { mount = "disk" } } }
+  local c = start(world, { [INDEX] = "storage-index 1\ni 1 x:old -\nc a 27 1,1,9\n" })
+  c.env.require("util").writeTable("/" .. CONFIG, { io = "io", allowed = { a = true }, index = { drive = "drive_0" } })
+  settings(c)
+  menuTo(c, "Item index")
+  menuTo(c, "This computer")
+  key(c, "home") key(c, "up") key(c, "enter")
+  screenHas(c, "Store all")
+  check("back here: old copy gone", c.files[INDEX] == nil)
+end
+
+-- Saving keeps what another computer saved in the meantime, and the format survives a round trip.
+do
+  local c = start({})
+  local result
+  sim.call(c, function()
+    local index = c.env.require("index")
+    local cfg = { io = "io", allowed = {} }
+    local mine = index.load(cfg)
+    local theirs = index.load(cfg)
+    theirs.chests.b = { size = 9, slots = { [2] = { name = "x:b", count = 3 } } }
+    index.save(cfg, theirs, { b = true })
+    mine.chests.a = { size = 27, slots = { [1] = { name = "x:sword", count = 1, nbt = "abc" }, [5] = { name = "x:a", count = 64 } } }
+    mine.names["x:sword#abc"] = "Sharp One"
+    index.save(cfg, mine, { a = true })
+    result = index.load(cfg)
+  end)
+  check("merge: keeps theirs", result.chests.b and result.chests.b.slots[2].count == 3)
+  check("merge: and mine", result.chests.a and result.chests.a.slots[5].count == 64 and result.chests.a.size == 27)
+  check("format: nbt", result.chests.a.slots[1].nbt == "abc" and result.chests.a.slots[1].nbt ~= nil)
+  check("format: names", result.names["x:sword#abc"] == "Sharp One")
+  check("format: no nbt", result.chests.a.slots[5].nbt == nil)
+end
+
+do
+  local c = ready(chest(27), chest(27, { { "x:a", 1 } }), chest(27))
+  c.files[INDEX] = "not an index"
+  recallFirst(c, "")
+  check("damaged: read again", screenHas(c, "A x1"))
 end
 
 if failed > 0 then

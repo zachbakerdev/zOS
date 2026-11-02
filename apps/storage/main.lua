@@ -1,5 +1,6 @@
 -- zOS Storage: one chest for putting items in and taking them out, and any number of others that
--- hold them. The config is global, in /etc/storage/, so anyone who can log in can change it.
+-- hold them. The config is global, in /etc/storage/, so anyone who can log in can change it. What
+-- the chests hold is kept in an item index, so that they don't all have to be read each time.
 
 local array = require("array")
 local ui = require("ui")
@@ -196,12 +197,93 @@ local function waitForChests()
     end
 end
 
+local function indexLabel(config)
+    local drive = config and config.index and config.index.drive
+    return drive and "network drive " .. drive or "this computer"
+end
+
+-- Choose where the item index is kept: here, or on a floppy in a disk drive on the network.
+local function chooseIndex(draft)
+    while true do
+        local current = draft.index and draft.index.drive
+        local drives = array.drives()
+        local items = {
+            { label = (current and "( ) " or "(*) ") .. "This computer", hint = "Only this computer uses it" },
+        }
+        for _, drive in ipairs(drives) do
+            local label = drive.name .. (drive.label and ' "' .. drive.label .. '"' or "")
+            items[#items + 1] = {
+                label = (drive.name == current and "(*) " or "( ) ") .. label,
+                hint = drive.empty and "Put a floppy in this drive to use it"
+                    or "Shared by every computer that uses these chests",
+            }
+        end
+        if #drives == 0 then
+            items[#items + 1] = {
+                label = "Look for network drives", hint = "Connect a disk drive to the network with a wired modem",
+            }
+        end
+
+        local choice = ui.menu({ title = TITLE .. " - Item index", items = items, back = true })
+        if not choice then return end
+        if choice == 1 then
+            draft.index = nil
+            return
+        end
+        local drive = drives[choice - 1]
+        if drive and drive.empty then
+            local text = "There's no floppy in " .. drive.name .. ". Put one in, then choose it again."
+            ui.message(TITLE, text, ui.theme.bad)
+        elseif drive then
+            draft.index = { drive = drive.name }
+            return
+        end
+    end
+end
+
+local function offlineNote(result)
+    if result.offline == 0 then return "" end
+    return "\n\n" .. plural(result.offline, "storage chest") .. " didn't respond."
+end
+
+local function indexNote(result)
+    if not result.indexError then return "" end
+    return "\n\nThe item index wasn't saved: " .. result.indexError
+end
+
+local function rebuildIndex(config)
+    ui.screen(TITLE .. " - Item index")
+    ui.text("Counting every item...")
+    local result = array.rebuild(config, progressBar())
+    local text = "Counted " .. plural(result.items, "item") .. " in " .. plural(result.chests, "chest") .. "."
+    local bad = result.indexError or result.offline > 0
+    ui.message(TITLE, text .. offlineNote(result) .. indexNote(result), bad and ui.theme.bad or ui.theme.good)
+end
+
+-- Save the draft, and keep the item index in step with it. Returns true, or false and why not.
+local function saveSetup(config, draft)
+    local ok, err = array.save(draft)
+    if not ok then return false, err end
+
+    -- The copy on this computer missed whatever happened while another one was used.
+    local wasLocal = config and not config.index
+    if not draft.index and not wasLocal then array.deleteLocalIndex() end
+
+    -- A chest that's ticked again may have changed while it wasn't.
+    local added = {}
+    for name in pairs(draft.allowed) do
+        if not (config and config.allowed[name]) then added[#added + 1] = name end
+    end
+    array.forget(draft, added)
+    return true
+end
+
 -- Show the setup screen. Returns the saved config, or nil if nothing was saved.
 local function setup(config)
     local chests, unlinked = waitForChests()
     if not chests then return nil end
 
-    local draft = { io = config and config.io, allowed = {} }
+    local draft = { io = config and config.io, allowed = {}, index = config and config.index }
     for name in pairs(config and config.allowed or {}) do draft.allowed[name] = true end
     if not config then
         draft.io = defaultIo(chests, unlinked)
@@ -222,29 +304,47 @@ local function setup(config)
 
         local items = {
             {
-                label = "I/O chest: " .. (draft.io or "not set"), submenu = true,
+                label = "I/O chest: " .. (draft.io or "not set"), submenu = true, action = "io",
                 hint = "Where items go in and come out",
             },
-            { label = "Storage chests: " .. count, submenu = true, hint = "Which chests can hold items" },
+            {
+                label = "Storage chests: " .. count, submenu = true, action = "storage",
+                hint = "Which chests can hold items",
+            },
         }
         local missing = array.missing(draft, chests, unlinked)
         if #missing > 0 then
             items[#items + 1] = {
-                label = "Disconnected chests: " .. #missing, submenu = true,
+                label = "Disconnected chests: " .. #missing, submenu = true, action = "missing",
                 hint = "Remove chests that are no longer connected",
             }
         end
-        items[#items + 1] = { label = "Save" }
+        items[#items + 1] = {
+            label = "Item index: " .. indexLabel(draft), submenu = true, action = "index",
+            hint = "Where the list of stored items is kept",
+        }
+        if config then
+            items[#items + 1] = {
+                label = "Rebuild item index", action = "rebuild",
+                hint = "Count every item again, if chests were changed by hand",
+            }
+        end
+        items[#items + 1] = { label = "Save", action = "save" }
 
         local choice = ui.menu({ title = TITLE .. " - Setup", selected = selected, back = true, items = items })
         selected = choice or selected
         if not choice then return nil end
-        if choice == 1 then
+        local action = items[choice].action
+        if action == "io" then
             chooseIo(draft, chests, unlinked)
-        elseif choice == 2 then
+        elseif action == "storage" then
             chooseStorage(draft, chests, unlinked)
-        elseif choice < #items then
+        elseif action == "missing" then
             removeDisconnected(draft, chests, unlinked)
+        elseif action == "index" then
+            chooseIndex(draft)
+        elseif action == "rebuild" then
+            rebuildIndex(config)
         elseif not draft.io then
             ui.message(TITLE, "Choose an I/O chest first.", ui.theme.bad)
         elseif count == 0 then
@@ -255,7 +355,7 @@ local function setup(config)
             for _, chest in ipairs(chests) do
                 if io and not array.connected(io, chest) then draft.allowed[chest.name] = nil end
             end
-            local ok, err = array.save(draft)
+            local ok, err = saveSetup(config, draft)
             if ok then return draft end
             ui.message(TITLE, "Couldn't save the settings: " .. tostring(err), ui.theme.bad)
         end
@@ -266,17 +366,12 @@ end
 
 local NO_IO = "The I/O chest isn't connected. Check its modem, or choose another in Settings."
 
-local function offlineNote(result)
-    if result.offline == 0 then return "" end
-    return "\n\n" .. plural(result.offline, "storage chest") .. " didn't respond."
-end
-
 local function storedText(result)
     local text = "Stored " .. plural(result.moved, "item") .. "."
     if result.left > 0 then
         text = text .. "\n\nStorage is full, so " .. result.left .. " stayed in the I/O chest."
     end
-    return text .. offlineNote(result)
+    return text .. offlineNote(result) .. indexNote(result)
 end
 
 local function storeAll(config)
@@ -312,7 +407,8 @@ local function recallItem(config, item)
     if not result then return ui.message(TITLE, NO_IO, ui.theme.bad) end
     if result.moved == 0 then
         local reason = result.left > 0 and "The I/O chest is full." or "There are none left in storage."
-        return ui.message(TITLE, "Nothing was recalled. " .. reason .. offlineNote(result), ui.theme.bad)
+        return ui.message(TITLE, "Nothing was recalled. " .. reason .. offlineNote(result) .. indexNote(result),
+            ui.theme.bad)
     end
 
     local text = "Recalled " .. result.moved .. " " .. item.name .. "."
@@ -408,9 +504,11 @@ end
 local function recall(config)
     ui.screen(TITLE .. " - Recall")
     ui.text("Searching...")
-    local stored, offline = array.items(config, progressBar())
+    local stored, offline, indexError = array.items(config, progressBar())
     if #stored == 0 then
-        return ui.message(TITLE, "There's nothing in storage." .. offlineNote({ offline = offline }), ui.theme.bad)
+        local result = { offline = offline, indexError = indexError }
+        local text = "There's nothing in storage." .. offlineNote(result) .. indexNote(result)
+        return ui.message(TITLE, text, ui.theme.bad)
     end
 
     local item = chooseItem(stored, offline)
@@ -429,7 +527,7 @@ local function main()
             items = {
                 { label = "Store all", hint = "Move everything in the I/O chest into storage" },
                 { label = "Recall item", submenu = true, hint = "Fill the I/O chest with an item" },
-                { label = "Settings", submenu = true, hint = "Choose the I/O and storage chests" },
+                { label = "Settings", submenu = true, hint = "Choose the chests and where the item index is kept" },
                 { label = "Exit" },
             },
         })

@@ -241,6 +241,20 @@ is missing. To replace a missing I/O chest, choose another under **I/O chest**.
 A loading bar shows how far it has got while it reads the chests or moves items, which takes a while
 on a large network.
 
+The app keeps an **item index** of what every storage chest holds, so it only reads a chest the first
+time it sees it. After that, searching needs no reading at all, **Store all** reads only the chests it
+put items into, and **Recall item** reads only the chests that hold the item, so a chest changed by hand
+can't make it hand over the wrong thing. **Settings** chooses where the index is kept:
+
+- **This computer**, in `/etc/storage/index`.
+- **A network drive**: a disk drive with a floppy in it, connected to the wired network with a modem.
+  Every computer that uses the same chests and chooses that drive shares one index, so items one of
+  them stores are found by all the others without reading the chests.
+
+Items added to or taken from a storage chest by hand, or by a hopper, aren't seen until the app next
+reads that chest. **Rebuild item index** in **Settings** reads every chest again. If the network drive
+is missing, the app reads the chests each time instead, and says the index wasn't saved.
+
 A chest next to the computer needs its own wired modem too, because CC: Tweaked can't move items
 between a chest attached by its side and one on a network. If that chest is empty, it looks like
 every other empty chest, so the app asks you to put an item in it. With no network at all, the

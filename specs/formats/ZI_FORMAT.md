@@ -13,9 +13,11 @@ A .zi file is simply a serialized lua object where the key is the absolute path 
 ```lua
 {
   ["zi:metadata"] = { version = 1 },
-  ["/startup.lua"] = "shell.run(\"/.zos/boot.lua\")\010",
-  ["/.zos/boot.lua"] = "print(\"Hello\")\010",
-  ["/etc/motd"] = "Welcome\010",
+  ["/startup.lua"] = [[shell.run("/.zos/boot.lua")
+]],
+  ["/.zos/boot.lua"] = [[print("Hello")
+]],
+  ["/etc/motd"] = "\010Welcome\010",
 }
 ```
 
@@ -69,7 +71,9 @@ File modes, labels and timestamps are not stored either.
 Writers SHOULD write:
 
 - `zi:metadata` first, then the entries sorted by path, one per line, so that the same input always gives the same bytes;
-- strings in printable ASCII only, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). `lua_string` in `tools/make_apps.py` does this. Three digits are required so a following digit isn't read as part of the escape.
+- strings in printable ASCII only. A file made only of printable ASCII and newlines, which doesn't start with a newline, SHOULD be written as a long bracket (`[[...]]`, or `[==[...]==]` with enough `=` that neither `[==[` nor `]==]` appears in the file, and the file doesn't end with `]==`). Long brackets need no escapes, which keeps code small. Any other file is written as a double-quoted string, escaping `"` and `\`, and writing every other byte as a three-digit decimal escape (`\010`). Three digits are required so a following digit isn't read as part of the escape. `lua_long_string` and `lua_string` in `tools/make_apps.py` do this.
+
+Lua reads any line ending inside a long bracket as a single newline, and drops a newline straight after the opening bracket. That's why only files without other control characters, and not starting with a newline, go in long brackets.
 
 Printable ASCII lets a .zi file survive Pastebin's line-ending conversion unchanged. `textutils.serialize` also produces a valid image, but it doesn't sort its keys and it leaves bytes above 127 unescaped.
 
@@ -148,4 +152,4 @@ An image has no signature, and because its paths are absolute it can replace `/s
 ## Limitations
 
 - **No integrity check.** A damaged image that still parses isn't detected. Sizes and hashes have to be carried outside the file, as `zos-update.manifest` does for bundles.
-- **Size.** The image is loaded into memory as a whole, and it's bigger than the files it holds because of the escapes. It won't fit on a default 125 KB floppy unless the files are small, and free Pastebin accounts are limited to 512 KB.
+- **Size.** The image is loaded into memory as a whole, and it's bigger than the files it holds, because of the brackets, paths and any escapes. It won't fit on a default 125 KB floppy unless the files are small, and free Pastebin accounts are limited to 512 KB.

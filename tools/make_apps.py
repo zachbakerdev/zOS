@@ -94,6 +94,23 @@ def lua_string(data):
     return "".join(out)
 
 
+def lua_long_string(data):
+    """A long-bracket Lua string for these bytes, which needs no escapes, or lua_string's if it can't.
+
+    Only printable ASCII and newlines go in one: Lua reads any line ending in a long bracket as a
+    newline, and drops a newline straight after the opening bracket.
+    """
+    if data.startswith(b"\n") or not re.fullmatch(rb"[\n\x20-\x7e]*", data):
+        return lua_string(data)
+    level = 0
+    # The closing bracket mustn't appear in the data, even partly made of its last bytes. Lua 5.1
+    # also rejects a level-0 opening bracket inside, so neither bracket may appear.
+    while (b"]" + b"=" * level + b"]" in data + b"]" + b"=" * level
+           or b"[" + b"=" * level + b"[" in data):
+        level += 1
+    return f"[{'=' * level}[{data.decode('ascii')}]{'=' * level}]"
+
+
 def upload(text, name, dev_key, public):
     """Upload to Pastebin and return the paste's code."""
     body = urllib.parse.urlencode({

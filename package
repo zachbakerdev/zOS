@@ -27,7 +27,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
-from make_apps import lua_string  # noqa: E402
+from make_apps import lua_long_string, lua_string  # noqa: E402
 from minify_lua import minify_file  # noqa: E402
 
 DEFAULT_SRC = os.path.join(ROOT, "src")
@@ -135,7 +135,7 @@ def check_paths(files):
 
 def build_image(files):
     lines = ["{", f'  ["zi:metadata"] = {{ version = {FORMAT_VERSION} }},']
-    lines += [f"  [{lua_string(path.encode())}] = {lua_string(data)}," for path, data in files]
+    lines += [f"  [{lua_string(path.encode())}] = {lua_long_string(data)}," for path, data in files]
     lines.append("}")
     return "\n".join(lines) + "\n"
 

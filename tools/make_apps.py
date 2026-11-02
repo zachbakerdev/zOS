@@ -3,7 +3,8 @@
 
 An app's source is a folder, apps/<id>/, holding:
 
-    app.manifest    { name = "Notes", description = "...", version = "1.0.0", minZos = "1.0.0" }
+    app.manifest    { name = "Notes", description = "...", version = "1.0.0", minZos = "1.0.0",
+                      devices = { "computer", "pocket" }, advanced = true }
     main.lua        the program the desktop runs
     service.lua     optional: started at boot to run in the background
     ...             any other files the app needs (modules, data)
@@ -44,6 +45,9 @@ MAX_PATH = 128
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 # Must match validPath in src/.zos/lib/apps.lua.
 PATH_PART = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$")
+
+# Must match apps.DEVICES in src/.zos/lib/apps.lua.
+DEVICES = ("computer", "pocket", "turtle")
 
 class ManifestError(Exception):
     pass
@@ -235,6 +239,14 @@ def check_manifest(m):
         raise ManifestError("minZos must be a major.minor.patch version, like minZos = \"2.1.0\" (in quotes)")
     if "admin" in m and not isinstance(m["admin"], bool):
         raise ManifestError("admin must be true or false")
+    if "devices" in m:
+        devices = m["devices"]
+        if (not isinstance(devices, dict) or not devices or set(devices) != set(range(1, len(devices) + 1))
+                or any(d not in DEVICES for d in devices.values()) or len(set(devices.values())) != len(devices)):
+            raise ManifestError("devices must list some of \"computer\", \"pocket\" and \"turtle\", "
+                                "like devices = { \"computer\" }")
+    if "advanced" in m and not isinstance(m["advanced"], bool):
+        raise ManifestError("advanced must be true or false")
 
 
 def version_key(version):

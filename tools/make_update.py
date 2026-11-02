@@ -37,8 +37,11 @@ def build_apps_manifest(version, packages):
     lines = [f"zos-apps {FORMAT_VERSION}", f"release={version}"]
     for app, manifest, text in packages:
         data = text.encode("ascii")
+        devices = manifest.get("devices")
         fields = [app["id"], manifest["version"], str(len(data)), hashlib.sha256(data).hexdigest(),
-                  manifest.get("minZos", ""), manifest["name"], manifest.get("description", "")]
+                  manifest.get("minZos", ""), manifest["name"], manifest.get("description", ""),
+                  ",".join(devices[i] for i in sorted(devices)) if devices else "",
+                  "advanced" if manifest.get("advanced") else ""]
         if any(c in field for field in fields for c in "\t\n"):
             sys.exit(f"apps/{app['id']}: app.manifest can't have tabs or line breaks in these fields")
         lines.append("app=" + "\t".join(fields))

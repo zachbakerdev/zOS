@@ -1,7 +1,8 @@
 {
     name = "Storage",
     description = "Search and move items around chests on a wired network",
-    version = "1.5.0",
+    version = "1.5.1",
     minZos = "1.9.0",
     author = "zOS",
+    devices = { "computer" },
 }

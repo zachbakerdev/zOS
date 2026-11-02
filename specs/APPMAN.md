@@ -50,7 +50,7 @@ notes 1.0.0 Notes
 
 ## appman available
 
-Prints one line for each entry in `update.checkApps`, in its order, with its id, version and status. The status is the same as in App Manager: `new`, `installed`, `update from <version>`, `older than installed` or `needs zOS <version>`.
+Prints one line for each entry in `update.checkApps`, in its order, with its id, version and status. Entries that aren't made for this device are left out, unless they're installed. The status is the same as in App Manager: `new`, `installed`, `update from <version>`, `older than installed` or `needs zOS <version>`.
 
 ```
 > appman available
@@ -76,12 +76,14 @@ Pastebin needs a prefix because a code can look like an app id. A file path is r
 
 1. Checks the user is an administrator.
 2. Gets the package. A release app that's up to date prints `<name> is up to date.` and succeeds.
-3. Fails if this zOS is older than the app's `minZos`.
+3. Fails if this zOS is older than the app's `minZos`. A release app that isn't made for this device, and isn't installed, fails with the message from `apps.fits`.
 4. Shows the app's name, version, status, id, author, file count, size and description. If the image has a `service.lua`, it says the app runs in the background even when nobody is logged in. It always warns that apps can read and change every file.
 5. Asks for confirmation.
 6. Calls `apps.install` and logs the result.
 
 A release is never downgraded. A file, URL or Pastebin image that's older than the installed version shows a warning and asks first, and with `-y` it fails, so a script can't downgrade an app by accident. Answering no prints nothing further and counts as success.
+
+A file, URL or Pastebin app that isn't made for this device prints the message from `apps.fits` and asks `Install it anyway?`. With `-y` it fails, as a downgrade does.
 
 ## appman update
 

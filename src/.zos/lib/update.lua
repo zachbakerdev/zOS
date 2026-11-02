@@ -142,9 +142,20 @@ local function parseAppLine(line)
         or not crypto.isHex(fields[4], 64) or (fields[5] ~= "" and not apps.validVersion(fields[5])) then
         return nil
     end
+    -- Fields 8 and 9 came later, so older releases leave them out.
+    local devices
+    if fields[8] and fields[8] ~= "" then
+        devices = {}
+        for device in (fields[8] .. ","):gmatch("(.-),") do
+            if not apps.validDevice(device) then return nil end
+            devices[#devices + 1] = device
+        end
+    end
+    if fields[9] and fields[9] ~= "" and fields[9] ~= "advanced" then return nil end
     return {
         id = fields[1], version = fields[2], size = tonumber(fields[3]), sha256 = fields[4],
         minZos = fields[5] ~= "" and fields[5] or nil, name = fields[6], description = fields[7],
+        devices = devices, advanced = fields[9] == "advanced",
     }
 end
 
@@ -172,6 +183,7 @@ function update.checkApps()
         entry.current = installed and installed.version or nil
         entry.newer = installed ~= nil and apps.compareVersions(entry.version, installed.version) > 0
         entry.supported = apps.supports(entry.minZos)
+        entry.fits = apps.fits(entry)
         list[#list + 1] = entry
     end
     table.sort(list, function(a, b)

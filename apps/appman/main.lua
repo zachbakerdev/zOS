@@ -32,12 +32,24 @@ local function needsZos(name, minZos)
         system.VERSION .. ". Check Settings > Updates.", ui.theme.bad)
 end
 
-local function install(pkg)
+-- fromRelease: the package came from the GitHub list, which hides apps that aren't made for this
+-- device unless they're installed, so there's nothing to warn about.
+local function install(pkg, fromRelease)
     local m = pkg.manifest
     if not session.admin then
         return ui.message(TITLE, "Only administrators can install apps.", ui.theme.bad)
     end
     if not apps.supports(m.minZos) then return needsZos(m.name, m.minZos) end
+
+    local fits, why = apps.fits(m)
+    if not fits and not fromRelease then
+        ui.screen(TITLE)
+        ui.text(why, ui.theme.bad)
+        ui.text("")
+        ui.text("It might not work on this device.", ui.theme.dim)
+        ui.text("")
+        if not ui.confirm("Install it anyway?") then return end
+    end
 
     ui.screen(TITLE)
     ui.text(m.name .. " " .. m.version .. "  (" .. status(pkg) .. ")", ui.theme.accent)
@@ -181,8 +193,14 @@ local function fromGitHub()
     ui.screen(TITLE)
     ui.text("Checking GitHub for apps...", ui.theme.dim)
     ui.loading()
-    local list, listErr = update.checkApps()
-    if not list then return ui.message(TITLE, listErr, ui.theme.bad) end
+    local all, listErr = update.checkApps()
+    if not all then return ui.message(TITLE, listErr, ui.theme.bad) end
+
+    -- Apps that aren't made for this device are left out, unless they're already installed.
+    local list = {}
+    for _, entry in ipairs(all) do
+        if entry.fits or entry.current then list[#list + 1] = entry end
+    end
 
     local updates = {}
     for _, entry in ipairs(list) do
@@ -216,7 +234,7 @@ local function fromGitHub()
     ui.loading()
     local pkg, err = update.downloadApp(entry)
     if not pkg then return ui.message(TITLE, err, ui.theme.bad) end
-    install(pkg)
+    install(pkg, true)
 end
 
 local function manage(app)

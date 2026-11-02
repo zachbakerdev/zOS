@@ -36,11 +36,11 @@ end
 ```
 zos-apps 1
 release=1.0
-app=<id>\t<version>\t<size>\t<sha256>\t<minZos>\t<name>\t<description>
+app=<id>\t<version>\t<size>\t<sha256>\t<minZos>\t<name>\t<description>\t<devices>\t<advanced>
 end
 ```
 
-There's one `app=` line for each app, with its fields separated by tabs. `minZos` and `description` MAY be empty.
+There's one `app=` line for each app, with its fields separated by tabs. `minZos` and `description` MAY be empty. `devices` is the manifest's `devices` joined with commas, such as `computer,turtle`, or empty for every device. `advanced` is `advanced` or empty. These two came later, so a line MAY stop after `description`, and zOS before 1.11.0 ignores them.
 
 ## System updates
 
@@ -88,6 +88,11 @@ Nothing under `/.zos` is touched. `onProgress(done, total)` is optional, and is 
 | `current`     | string  | The installed version, or `nil` if it isn't installed        |
 | `newer`       | boolean | Whether this is an update to an installed app                |
 | `supported`   | boolean | Whether this zOS is new enough                               |
+| `devices`     | table   | The devices it's made for, or `nil` for every device         |
+| `advanced`    | boolean | Whether it needs an advanced device                          |
+| `fits`        | boolean | Whether it's made for this device, from `apps.fits`          |
+
+`checkApps` lists apps whether they fit or not. Callers that offer apps to install leave out the ones that don't fit and aren't installed.
 
 `downloadApp` rejects a download whose size or hash differs from the list, and one whose id or version doesn't match the entry.
 

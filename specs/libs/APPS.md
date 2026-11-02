@@ -81,9 +81,46 @@ Returns whether `path` can be a file in an app: relative, at most 128 bytes, and
 
 ### Manifests
 
-`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `minZos` MUST be a version, and `admin` MUST be a boolean.
+`apps.parse` and `apps.list` check manifests with the same rules as `check_manifest` in `tools/make_apps.py`, and the two MUST be kept the same. `name` is required text and `version` is a required version. `description` and `author` MUST be text, `minZos` MUST be a version, and `admin` and `advanced` MUST be booleans. `devices` MUST be a list of one to three different [devices](#devices), with nothing else in the table.
 
 A version MUST be exactly three whole numbers, major, minor and patch, separated by dots, such as `"1.0.0"`. Nothing else is a version: `"1.0"`, `"1.0.0.0"`, `"v1.0.0"` and `"1.0.0-beta"` are all refused.
+
+### Devices
+
+An app MAY say what it's made for. Neither field stops anyone installing it: they decide what's offered and what needs a warning.
+
+| Field      | Meaning                                                                              |
+| ---------- | ------------------------------------------------------------------------------------ |
+| `devices`  | The kinds of device it's made for: `"computer"`, `"pocket"` and `"turtle"`. Leaving it out means every kind |
+| `advanced` | Whether it needs an advanced device, which has colour and a mouse. Defaults to false |
+
+A command computer counts as a computer.
+
+#### apps.device()
+
+Returns the kind of this device, `"computer"`, `"pocket"` or `"turtle"`, and whether it's advanced. A pocket computer has the `pocket` API, a turtle has the `turtle` API, and an advanced device's `term.isColor()` is true.
+
+#### apps.fits(info)
+
+Returns `true` if the app is made for this device, or `false` and a message such as `Storage is made for computers, not pocket computers.` or `Minesweeper needs an advanced turtle.` `info` is anything with `name`, `devices` and `advanced`: a manifest, an app record or an entry from `update.checkApps`.
+
+#### apps.validDevice(device)
+
+Returns whether `device` is one of `apps.DEVICES`.
+
+#### apps.describeDevices(devices)
+
+Returns a list of devices as text, such as `computers, pocket computers and turtles`.
+
+#### Who checks
+
+| Caller                                  | An app that doesn't fit                                     |
+| --------------------------------------- | ----------------------------------------------------------- |
+| App Manager's **Get apps from GitHub**  | Isn't listed, unless it's installed                         |
+| App Manager's disk, file and URL installs | Shows why and asks `Install it anyway?` before the usual screen |
+| `appman available` and `appman install <id>` | Isn't listed and can't be installed, unless it's installed |
+| `appman install` from a file, URL or Pastebin | Warns and asks. With `-y` it fails                    |
+| `apps.install`, `update.finishApps`     | Not checked. An app that's installed keeps getting updates  |
 
 ### Constants
 
@@ -93,6 +130,7 @@ A version MUST be exactly three whole numbers, major, minor and patch, separated
 | `apps.FORMAT_VERSION`   | 1, the version of the .za format it reads               |
 | `apps.METADATA`         | `"za:metadata"`, the metadata key                       |
 | `apps.PROTECTED`        | The ids of the built-in apps, as (id -> true)           |
+| `apps.DEVICES`          | `{ "computer", "pocket", "turtle" }`                    |
 
 ## Installed apps
 
@@ -107,6 +145,8 @@ Installed apps are described by an app record, which is also what `main.lua` rec
 | `author`      | string  | Its author, or `nil`                                           |
 | `minZos`      | string  | The oldest zOS it runs on, or `nil`                            |
 | `admin`       | boolean | Whether only administrators can open it. Defaults to false     |
+| `devices`     | table   | The devices it's made for, or `nil` for every device           |
+| `advanced`    | boolean | Whether it needs an advanced device. Defaults to false         |
 | `dir`         | string  | Its folder, as an absolute path                                |
 | `main`        | string  | The absolute path of `main.lua`                                |
 | `service`     | string  | The absolute path of `service.lua`, or `nil` if it has none    |

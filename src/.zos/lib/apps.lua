@@ -11,6 +11,7 @@ local apps = {
     FORMAT_VERSION = 1,
     METADATA = "za:metadata",
     PROTECTED = {},
+    DEVICES = { "computer", "pocket", "turtle" },
 }
 
 for _, id in ipairs(builtin) do apps.PROTECTED[id] = true end
@@ -57,6 +58,60 @@ function apps.supports(minZos)
     return minZos == nil or apps.compareVersions(system.VERSION, minZos) >= 0
 end
 
+-- Devices --------------------------------------------------------------------------------------
+
+local PLURAL = { computer = "computers", pocket = "pocket computers", turtle = "turtles" }
+local SINGULAR = { computer = "computer", pocket = "pocket computer", turtle = "turtle" }
+
+function apps.validDevice(device)
+    return PLURAL[device] ~= nil
+end
+
+-- The kind of device this is, "computer", "pocket" or "turtle", and whether it's advanced.
+function apps.device()
+    local kind = (pocket ~= nil and "pocket") or (turtle ~= nil and "turtle") or "computer"
+    return kind, term.isColor() == true
+end
+
+-- "computers", "computers and turtles", "computers, pocket computers and turtles".
+function apps.describeDevices(devices)
+    local names = {}
+    for _, device in ipairs(devices) do names[#names + 1] = PLURAL[device] or device end
+    if #names <= 1 then return names[1] or "" end
+    return table.concat(names, ", ", 1, #names - 1) .. " and " .. names[#names]
+end
+
+-- Whether an app is made for this device. `info` is a manifest, an app record or a release entry,
+-- with `name`, `devices` and `advanced`. Returns true, or false and why not.
+function apps.fits(info)
+    local kind, advanced = apps.device()
+    if info.devices then
+        local listed = false
+        for _, device in ipairs(info.devices) do listed = listed or device == kind end
+        if not listed then
+            return false, info.name .. " is made for " .. apps.describeDevices(info.devices) .. ", not " ..
+                PLURAL[kind] .. "."
+        end
+    end
+    if info.advanced and not advanced then
+        return false, info.name .. " needs an advanced " .. SINGULAR[kind] .. "."
+    end
+    return true
+end
+
+-- A list of devices from a manifest: 1-3 different known devices, and nothing else.
+local function validDevices(devices)
+    if type(devices) ~= "table" or #devices < 1 then return false end
+    local seen, count = {}, 0
+    for _ in pairs(devices) do count = count + 1 end
+    if count ~= #devices then return false end
+    for _, device in ipairs(devices) do
+        if not apps.validDevice(device) or seen[device] then return false end
+        seen[device] = true
+    end
+    return true
+end
+
 -- Manifests. Keep this the same as check_manifest in tools/make_apps.py.
 local function checkManifest(m)
     if type(m) ~= "table" then return nil, "The manifest isn't a table." end
@@ -71,6 +126,12 @@ local function checkManifest(m)
         return nil, "The manifest's minZos isn't like 1.0.0."
     end
     if m.admin ~= nil and type(m.admin) ~= "boolean" then return nil, "The manifest's admin isn't true or false." end
+    if m.devices ~= nil and not validDevices(m.devices) then
+        return nil, "The manifest's devices aren't a list of computer, pocket and turtle."
+    end
+    if m.advanced ~= nil and type(m.advanced) ~= "boolean" then
+        return nil, "The manifest's advanced isn't true or false."
+    end
     return m
 end
 
@@ -144,6 +205,8 @@ local function record(id)
         author = manifest.author,
         minZos = manifest.minZos,
         admin = manifest.admin == true,
+        devices = manifest.devices,
+        advanced = manifest.advanced == true,
         dir = dir,
         main = main,
         service = fs.exists(service) and service or nil,

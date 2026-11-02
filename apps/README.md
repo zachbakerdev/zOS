@@ -23,8 +23,16 @@ The folder name is the app's id: 1-32 lowercase letters, digits, `-` or `_`.
     author = "you",
     minZos = "1.0.0",                    -- optional: the oldest zOS it runs on
     admin = true,                        -- optional: only administrators can open it (default false)
+    devices = { "computer", "turtle" },  -- optional: what it's made for (default every device)
+    advanced = true,                     -- optional: needs an advanced device (default false)
 }
 ```
+
+`devices` lists some of `"computer"`, `"pocket"` (pocket computers) and `"turtle"`, each once. Set
+it when an app can't work on the others, for example because it needs a wired modem or has to stay
+in one place. Set `advanced` when it needs colour or a mouse. **Get apps from GitHub** hides apps that
+don't fit the device, unless they're already installed. Other ways of installing warn, and let an
+admin install anyway.
 
 Versions and `minZos` MUST have exactly a major, minor and patch number, such as `1.2.0`. Anything
 else, such as `1.2` or `1.2.0-beta`, is refused by the build and by zOS.

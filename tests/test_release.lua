@@ -91,6 +91,7 @@ check("the apps manifest reads: " .. tostring(err), list and #list == #ids)
 for _, entry in ipairs(list or {}) do
   local name = entry.id .. ": "
   check(name .. "is supported", entry.supported)
+  check(name .. "fits a computer", entry.fits)
   local pkg, why = call(update.downloadApp, entry)
   check(name .. "downloads: " .. tostring(why), pkg)
   if pkg then
@@ -102,6 +103,17 @@ for _, entry in ipairs(list or {}) do
       check(name .. "installs: " .. tostring(reason), app)
     end
   end
+end
+
+-- Apps that need wireless modems or a fixed place aren't offered to pocket computers or turtles.
+local computerOnly = { storage = true, ["root-server"] = true, ["mail-server"] = true }
+for _, device in ipairs({ "pocket", "turtle" }) do
+  c.env[device] = {}
+  list = call(update.checkApps)
+  for _, entry in ipairs(list or {}) do
+    check(entry.id .. " on a " .. device, entry.fits == not computerOnly[entry.id])
+  end
+  c.env[device] = nil
 end
 
 -- The installer ---------------------------------------------------------------------------------

@@ -93,11 +93,13 @@ end
 local function installFromSource(source)
     needAdmin("install")
     local pkg, err
+    local fits, warning = true, nil
     if apps.validId(source) then
         local list, listErr = update.checkApps()
         if not list then error(listErr, 0) end
         local entry, why = releaseEntry(list, source)
         if not entry then error(why, 0) end
+        if not entry.fits and not entry.current then error(select(2, apps.fits(entry)), 0) end
         if not entry.supported then error(entry.name .. " needs zOS " .. entry.minZos .. ".", 0) end
         if entry.current and not entry.newer then
             print(entry.name .. " is up to date.")
@@ -116,9 +118,16 @@ local function installFromSource(source)
             if yes then error("That's older than the installed version.", 0) end
             print("This is older than the installed version.")
         end
+        -- Only a release hides apps that aren't made for this device, so other sources warn.
+        fits, warning = apps.fits(pkg.manifest)
+        if not fits and yes then error(warning .. " Leave out -y to install it anyway.", 0) end
     end
     showPackage(pkg)
-    if ask("Install it?") then install(pkg) end
+    if not fits then
+        print("")
+        printError(warning .. " It might not work on this device.")
+    end
+    if ask(fits and "Install it?" or "Install it anyway?") then install(pkg) end
 end
 
 local function updateApps(ids)
@@ -187,7 +196,9 @@ if command == "list" then
 elseif command == "available" then
     local list, err = update.checkApps()
     if not list then error(err, 0) end
-    for _, entry in ipairs(list) do print(entry.id .. " " .. entry.version .. " " .. entryStatus(entry)) end
+    for _, entry in ipairs(list) do
+        if entry.fits or entry.current then print(entry.id .. " " .. entry.version .. " " .. entryStatus(entry)) end
+    end
 elseif command == "install" and args[2] and not args[3] then
     installFromSource(args[2])
 elseif command == "update" then

@@ -1,8 +1,9 @@
 {
     name = "Mail Server",
     description = "Host mailboxes under a hostname from a root server",
-    version = "1.1.0",
+    version = "1.1.1",
     author = "zOS",
+    devices = { "computer" },
     minZos = "1.10.0",
     admin = true,
 }

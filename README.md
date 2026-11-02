@@ -174,8 +174,10 @@ Copy an app's `.za` file onto a floppy, from a release or from `dist/apps/` afte
 
 **Get apps from GitHub** in the App Manager lists every app in the latest release. It marks which
 are new and which are updates, and **Update all** installs every update at once. An app that needs
-a newer zOS is marked and left as it is until zOS is updated. These apps come from the same place as zOS updates, over HTTPS, and each download is checked
-against the list. **Install from URL or Pastebin** installs whatever it's given. An app that's already up to date is never replaced by an older one here.
+a newer zOS is marked and left as it is until zOS is updated. Apps that aren't made for this kind of
+device, such as Storage on a pocket computer, aren't listed unless they're already installed. These apps come from the same place as zOS updates, over HTTPS, and each download is checked
+against the list. **Install from URL or Pastebin** installs whatever it's given. Installing from a disk, file, URL or
+Pastebin warns about an app that isn't made for this device, and installs it only if you go ahead anyway. An app that's already up to date is never replaced by an older one here.
 
 Only admins can install or remove apps. [APPMAN.md](specs/APPMAN.md) describes the `appman` command
 for doing this from the Terminal, and [APPS.md](specs/libs/APPS.md) the library that App Manager uses.
@@ -198,8 +200,13 @@ An app is a folder with a manifest and a main program, installed to `/.zos/apps/
   author = "you",
   minZos = "1.0.0",        -- optional: the oldest zOS it runs on
   admin = true,            -- optional: only administrators can open it (default false)
+  devices = { "computer", "pocket", "turtle" }, -- optional: what it's made for (default all)
+  advanced = true,         -- optional: needs an advanced device (default false)
 }
 ```
+
+Storage, Root Server and Mail Server are made for computers only. Pocket computers and turtles can't
+use wired modems, and servers need to stay in one place.
 
 The desktop's **Apps** menu lists every installed app the user can open, by name, and the built-in
 apps are listed by name on the desktop itself. `main.lua` gets `...` = `session, app`, and Ctrl+T stops only

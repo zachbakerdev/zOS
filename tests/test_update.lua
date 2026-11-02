@@ -26,12 +26,13 @@ local function readFile(path)
 end
 local STARTUP = readFile("src/startup.lua")
 
-local function appText(c, id, version, minZos)
+-- extra is more manifest text, such as 'devices = { "computer" }'.
+local function appText(c, id, version, minZos, extra)
   return c.env.textutils.serialize({
     ["za:metadata"] = { version = 1, id = id },
     ["main.lua"] = "print('hi')",
     ["app.manifest"] = '{ name = "' .. id .. '", version = "' .. version .. '"' ..
-      (minZos and (', minZos = "' .. minZos .. '"') or "") .. ' }',
+      (minZos and (', minZos = "' .. minZos .. '"') or "") .. (extra and (", " .. extra) or "") .. ' }',
   })
 end
 
@@ -48,19 +49,27 @@ end
 local APPS_MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-apps.manifest"
 local function appUrl(id) return "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/" .. id .. ".za" end
 
--- Publish these apps (id -> version, or { version, minZos }) as a list and .za files.
+-- Publish these apps (id -> version, or { version, minZos, devices, advanced }) as a list and .za
+-- files. devices is a list like { "computer" }.
 local function publishApps(c, list)
   local ids = {}
   for id in pairs(list) do ids[#ids + 1] = id end
   table.sort(ids)
   local lines = { "zos-apps 1", "release=" .. NEXT }
   for _, id in ipairs(ids) do
-    local version, minZos = list[id], nil
-    if type(version) == "table" then version, minZos = version[1], version[2] end
-    local text = appText(c, id, version, minZos)
+    local version, minZos, devices, advanced = list[id], nil, nil, nil
+    if type(version) == "table" then version, minZos, devices, advanced = version[1], version[2], version[3], version[4] end
+    local extra = {}
+    if devices then extra[#extra + 1] = 'devices = { "' .. table.concat(devices, '", "') .. '" }' end
+    if advanced then extra[#extra + 1] = "advanced = true" end
+    local text = appText(c, id, version, minZos, #extra > 0 and table.concat(extra, ", ") or nil)
     c.site[appUrl(id)] = text
-    lines[#lines + 1] = "app=" .. table.concat({ id, version, #text, c.crypto.sha256(text), minZos or "",
-      "App " .. id, "About " .. id }, "\t")
+    local fields = { id, version, #text, c.crypto.sha256(text), minZos or "", "App " .. id, "About " .. id }
+    if devices or advanced then
+      fields[8] = devices and table.concat(devices, ",") or ""
+      fields[9] = advanced and "advanced" or ""
+    end
+    lines[#lines + 1] = "app=" .. table.concat(fields, "\t")
   end
   c.site[APPS_MANIFEST] = table.concat(lines, "\n") .. "\nend\n"
 end
@@ -556,6 +565,107 @@ do -- Installing from a file gets the same check.
   c.env.os.queueEvent("sim_line", "new.za")
   check("a file gets the same check", screenHas(c, "needs zOS 3.0.0"))
   check("nothing installed from the file", not c.env.fs.exists(".zos/apps/fresh"))
+end
+
+-- Devices ---------------------------------------------------------------------------
+
+do
+  local c = setup(withApps())
+  local apps = c.env.require("apps")
+  local kind, advanced = apps.device()
+  check("a computer is a computer", kind == "computer" and advanced == true)
+  c.env.turtle = {}
+  check("knows a turtle", apps.device() == "turtle")
+  c.env.turtle, c.env.pocket = nil, {}
+  check("knows a pocket computer", apps.device() == "pocket")
+  local isColor = c.env.term.isColor
+  c.env.term.isColor = function() return false end
+  check("knows a basic device", select(2, apps.device()) == false)
+  c.env.term.isColor = isColor
+  c.env.pocket = nil
+
+  local function parsed(extra) return apps.parse(appText(c, "x", "1.0.0", nil, extra)) end
+  check("devices are optional", parsed(nil))
+  check("accepts a list of devices", parsed('devices = { "computer", "turtle" }'))
+  check("accepts advanced", parsed("advanced = true"))
+  for _, bad in ipairs({ 'devices = "computer"', "devices = {}", 'devices = { "phone" }',
+      'devices = { "computer", "computer" }', 'devices = { "computer", x = "turtle" }', 'advanced = "yes"' }) do
+    check("refuses " .. bad, not parsed(bad))
+  end
+
+  local function fits(manifest) return apps.fits(manifest) end
+  check("no devices fits everywhere", fits({ name = "X" }))
+  check("fits a listed device", fits({ name = "X", devices = { "turtle", "computer" } }))
+  c.env.pocket = {}
+  local ok, why = fits({ name = "X", devices = { "computer", "turtle" } })
+  check("doesn't fit an unlisted device", not ok and why == "X is made for computers and turtles, not pocket computers.")
+  c.env.pocket = nil
+  check("advanced fits an advanced computer", fits({ name = "X", advanced = true }))
+  c.env.term.isColor = function() return false end
+  ok, why = fits({ name = "X", advanced = true })
+  check("advanced doesn't fit a basic computer", not ok and why == "X needs an advanced computer.")
+  c.env.term.isColor = isColor
+
+  check("installs whatever the devices", apps.install(parsed('devices = { "pocket" }, advanced = true')))
+  local app = apps.get("x")
+  check("devices are kept on the app", app.devices[1] == "pocket" and #app.devices == 1 and app.advanced == true)
+
+  publishApps(c, { old = { "2.0.0", nil, { "pocket", "turtle" } }, fresh = { "1.0.0", nil, { "computer" }, true },
+    same = "2.0.0" })
+  local list = call(c, c.update.checkApps)
+  local byId = {}
+  for _, entry in ipairs(list) do byId[entry.id] = entry end
+  check("reads devices from the release", byId.old.devices[2] == "turtle" and not byId.old.fits)
+  check("reads advanced from the release", byId.fresh.advanced == true and byId.fresh.fits)
+  check("no devices means every device", byId.same.devices == nil and byId.same.fits and not byId.same.advanced)
+
+  local line = "app=old\t2.0.0\t5\t" .. string.rep("0", 64) .. "\t\tOld\tOld app\t%s\t%s\n"
+  c.site[APPS_MANIFEST] = "zos-apps 1\nrelease=9.0.0\n" .. line:format("phone", "") .. "end\n"
+  local refused = call(c, c.update.checkApps)
+  check("refuses an unknown device", refused == nil)
+  c.site[APPS_MANIFEST] = "zos-apps 1\nrelease=9.0.0\n" .. line:format("", "yes") .. "end\n"
+  refused = call(c, c.update.checkApps)
+  check("refuses a bad advanced", refused == nil)
+end
+
+do -- GitHub hides what isn't made for this device, unless it's installed.
+  local c = setup(withApps())
+  c.env.pocket = {}
+  publishApps(c, { old = { "2.0.0", nil, { "computer" } }, fresh = { "1.0.0", nil, { "computer" } },
+    pocketed = { "1.0.0", nil, { "pocket" } } })
+  appman(c, true)
+  screenHas(c, "Get apps from GitHub")
+  key(c, "enter")
+  screenHas(c, "App pocketed 1.0.0  (new)")
+  check("hides an app for other devices", not c.screenText():find("App fresh", 1, true))
+  check("still updates an installed one", c.screenText():find("App old 2.0.0  (update from 1.0.0)", 1, true))
+  check("which is in Update all", c.screenText():find("Update all (1)", 1, true))
+end
+
+do -- Other sources warn, and install if the warning is accepted.
+  local c = setup(withApps())
+  c.env.pocket = {}
+  c.files["big.za"] = appText(c, "big", "1.0.0", nil, 'devices = { "computer" }')
+  appman(c, true)
+  screenHas(c, "Install from file")
+  pick(c, 2)
+  screenHas(c, "Path")
+  c.env.os.queueEvent("sim_line", "big.za")
+  check("warns about the device", screenHas(c, "big is made for computers, not pocket computers."))
+  check("asks to go ahead anyway", screenHas(c, "Install it anyway?"))
+  char(c, "n")
+  screenHas(c, "Install from file")
+  check("nothing installed without agreeing", not c.env.fs.exists(".zos/apps/big"))
+
+  key(c, "enter") -- the menu remembers Install from file
+  screenHas(c, "Path")
+  c.env.os.queueEvent("sim_line", "big.za")
+  screenHas(c, "Install it anyway?")
+  char(c, "y")
+  check("then the usual install screen", screenHas(c, "Install it?"))
+  char(c, "y")
+  check("installs after the warning", screenHas(c, "Installed big 1.0.0"))
+  check("files in place", c.files[".zos/apps/big/main.lua"] == "print('hi')")
 end
 
 do -- An update whose app needs more than the update provides is skipped, and zOS still boots.

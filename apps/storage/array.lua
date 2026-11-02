@@ -179,6 +179,30 @@ local function readable(id)
     return (words:gsub("(%a)(%w*)", function(first, rest) return first:upper() .. rest end))
 end
 
+local BOOK = "minecraft:enchanted_book"
+
+-- The name `detail` shows, with what an enchanted book holds: "Book: Sharpness V, Mending", or
+-- "Its Own Name (Mending)" if it was renamed.
+local function detailName(item, detail)
+    local name = detail and detail.displayName or readable(item.name)
+    if item.name ~= BOOK or not detail or type(detail.enchantments) ~= "table" then return name end
+    local parts = {}
+    for _, enchantment in ipairs(detail.enchantments) do
+        parts[#parts + 1] = enchantment.displayName
+            or readable(tostring(enchantment.name)) .. " " .. tostring(enchantment.level or "")
+    end
+    if #parts == 0 then return name end
+    if name == "Enchanted Book" then return "Book: " .. table.concat(parts, ", ") end
+    return name .. " (" .. table.concat(parts, ", ") .. ")"
+end
+
+-- Whether the index has a name for `item`. A book named before its enchantments were shown is asked again.
+local function hasName(data, item)
+    local name = data.names[keyOf(item)]
+    if not name then return false end
+    return item.name ~= BOOK or name:find("^Book: ") ~= nil or name:find("%)$") ~= nil
+end
+
 local function itemName(data, item)
     return item.nbt and data.names[keyOf(item)] or readable(item.name)
 end
@@ -195,7 +219,8 @@ local function allowedNames(config)
 end
 
 -- Read one chest into the index. Returns false, leaving what the index had, if it doesn't answer.
--- Items with NBT can be renamed, so their names are asked for, but only once.
+-- Items with NBT can be renamed, so their names are asked for, but only once. So is each item's
+-- stack size. An enchanted book's name says what's on it.
 local function readChest(data, name)
     local contents, size = ask(name, "list"), ask(name, "size")
     if not contents or not size then return false end
@@ -203,9 +228,11 @@ local function readChest(data, name)
     for slot, item in pairs(contents) do
         chest.slots[slot] = { name = item.name, count = item.count, nbt = item.nbt }
         local key = keyOf(item)
-        if item.nbt and not data.names[key] then
+        local needsName = item.nbt and not hasName(data, item)
+        if needsName or not data.stacks[key] then
             local detail = ask(name, "getItemDetail", slot)
-            data.names[key] = detail and detail.displayName or readable(item.name)
+            if needsName then data.names[key] = detailName(item, detail) end
+            if detail and detail.maxCount then data.stacks[key] = detail.maxCount end
         end
     end
     data.chests[name] = chest
@@ -227,7 +254,8 @@ local function readChests(state, names, onProgress)
 end
 
 -- The storage chests as the index has them. Each chest has name, free and holds.
--- Items are (key -> { key, id, name, count, slots = { { chest, slot, count } } }).
+-- Items are (key -> { key, id, name, count, stack, slots = { { chest, slot, count } } }), where stack
+-- is how many fit in one stack, if that's known.
 local function view(state)
     local chests, items = {}, {}
     for _, name in ipairs(state.names) do
@@ -242,6 +270,7 @@ local function view(state)
                 chest.holds[key] = true
                 items[key] = items[key] or {
                     key = key, id = item.name, name = itemName(state.data, item), count = 0, slots = {},
+                    stack = state.data.stacks[key],
                 }
                 items[key].count = items[key].count + item.count
                 table.insert(items[key].slots, { chest = name, slot = slot, count = item.count })
@@ -311,8 +340,10 @@ end
 -- { chests, items, offline, indexError }, where chests is how many were read and items how many they hold.
 -- onProgress is called as for array.items.
 function array.rebuild(config, onProgress)
+    -- Names and stack sizes belong to the item, not the chest, so they're kept.
+    local old = index.load(config)
     local state = {
-        config = config, data = { chests = {}, names = {} }, changed = {}, offline = 0,
+        config = config, data = { chests = {}, names = old.names, stacks = old.stacks }, changed = {}, offline = 0,
         names = allowedNames(config), answered = {},
     }
     readChests(state, state.names, onProgress)
@@ -451,11 +482,14 @@ function array.store(config, key, limit, onProgress)
     return { moved = moved, left = wanted - moved, offline = state.offline, indexError = close(state) }
 end
 
--- Move as many of the item `key` as fit into the I/O chest. Returns { moved, left, offline, indexError },
--- where left stayed in the array, or nil if the I/O chest has gone. onProgress is called as for
+-- Move the item `key` into the I/O chest: amount.count of them, amount.stacks stacks of them, or as
+-- many as fit if amount is nil. The smallest stacks go first, so that storage gets slots back.
+-- Returns { moved, left, full, offline, indexError }, where left stayed in the array and full is true if
+-- the I/O chest filled up first, or nil if the I/O chest has gone. onProgress is called as for
 -- array.store. The chests the index says hold it are read first, in case it's out of date.
-function array.recall(config, key, onProgress)
+function array.recall(config, key, amount, onProgress)
     if not ask(config.io, "size") then return nil end
+    amount = amount or {}
     local state = open(config, onProgress)
     local _, items = view(state)
     local holders, seen = {}, {}
@@ -466,23 +500,41 @@ function array.recall(config, key, onProgress)
 
     _, items = view(state)
     local item = items[key]
-    if not item then return { moved = 0, left = 0, offline = state.offline, indexError = close(state) } end
+    if not item then return { moved = 0, left = 0, full = false, offline = state.offline, indexError = close(state) } end
 
-    local moved = 0
-    if onProgress then onProgress(0, #item.slots, "stack") end
-    for i, place in ipairs(item.slots) do
-        local count = ask(place.chest, "pushItems", config.io, place.slot)
+    local limit = amount.count or (amount.stacks and amount.stacks * (item.stack or 64)) or item.count
+    local places = item.slots
+    table.sort(places, function(a, b)
+        if a.count ~= b.count then return a.count < b.count end
+        if a.chest ~= b.chest then return a.chest < b.chest end
+        return a.slot < b.slot
+    end)
+    -- Only the stacks it needs, so that the bar counts those.
+    local planned, enough = 0, 0
+    while planned < #places and enough < limit do
+        planned = planned + 1
+        enough = enough + places[planned].count
+    end
+
+    local moved, full = 0, false
+    if onProgress and planned > 0 then onProgress(0, planned, "stack") end
+    for i = 1, planned do
+        local place = places[i]
+        local wanted = math.min(place.count, limit - moved)
+        local count = ask(place.chest, "pushItems", config.io, place.slot, wanted)
         if count then
             moved = moved + count
             local slots = state.data.chests[place.chest].slots
             slots[place.slot].count = place.count - count
             if count >= place.count then slots[place.slot] = nil end
             state.changed[place.chest] = true
-            if count < place.count then break end -- the I/O chest is full
+            full = count < wanted
         end
-        if onProgress then onProgress(i, #item.slots, "stack") end
+        -- A full chest ends it early, so the bar jumps to the end with it.
+        if onProgress then onProgress(full and planned or i, planned, "stack") end
+        if full then break end
     end
-    return { moved = moved, left = item.count - moved, offline = state.offline, indexError = close(state) }
+    return { moved = moved, left = item.count - moved, full = full, offline = state.offline, indexError = close(state) }
 end
 
 return array

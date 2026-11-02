@@ -5,6 +5,7 @@
 -- The file is text, one line each, to fit a large network on a floppy:
 --   storage-index 1
 --   i <number> <item id> <nbt or -> [display name, for items with NBT]
+--   s <item number> <how many fit in a stack>, after its item, if that's known
 --   c <chest> <size> <slot>,<item number>,<count> ...
 
 local util = require("util")
@@ -14,7 +15,7 @@ local index = {}
 local LOCAL = "/etc/storage/index"
 local HEADER = "storage-index 1"
 
-local function empty() return { chests = {}, names = {} } end
+local function empty() return { chests = {}, names = {}, stacks = {} } end
 
 local function sorted(t)
     local keys = {}
@@ -48,6 +49,8 @@ local function encode(data)
                 local display = item.nbt and data.names[key]
                 if display then line = line .. " " .. display:gsub("[\r\n]", " ") end
                 lines[#lines + 1] = line
+                local stack = data.stacks and data.stacks[key]
+                if stack then lines[#lines + 1] = "s " .. count .. " " .. stack end
             end
             parts[#parts + 1] = slot .. "," .. numbers[key] .. "," .. item.count
         end
@@ -70,6 +73,10 @@ local function decode(text)
                 items[tonumber(number)] = { id = id, nbt = nbt }
                 if nbt and name ~= "" then data.names[id .. "#" .. nbt] = name end
             end
+        elseif kind == "s" then
+            local number, stack = rest:match("^(%d+) (%d+)$")
+            local item = number and items[tonumber(number)]
+            if item then data.stacks[item.id .. "#" .. tostring(item.nbt)] = tonumber(stack) end
         elseif kind == "c" then
             local name, size, slots = rest:match("^(%S+) (%d+) ?(.*)$")
             if name then
@@ -96,7 +103,7 @@ local function read(path)
 end
 
 -- The saved index, as { chests = { name -> { size, slots = { slot -> { name, count, nbt } } } },
--- names = { key -> display name } }. It's empty if there's none yet. If it can't be reached, it's
+-- names = { key -> display name }, stacks = { key -> stack size } }. It's empty if there's none yet. If it can't be reached, it's
 -- empty and the reason comes second.
 function index.load(config)
     local path, err = index.path(config)
@@ -115,7 +122,8 @@ function index.save(config, data, changed)
     if changed then
         latest = read(path) or empty()
         for name in pairs(changed) do latest.chests[name] = data.chests[name] end
-        for key, name in pairs(data.names) do latest.names[key] = latest.names[key] or name end
+        for key, name in pairs(data.names) do latest.names[key] = name end
+        for key, stack in pairs(data.stacks or {}) do latest.stacks[key] = latest.stacks[key] or stack end
     end
 
     local temp = path .. ".new"

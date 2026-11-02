@@ -241,14 +241,15 @@ local function chooseIndex(draft)
     end
 end
 
-local function offlineNote(result)
+-- Notes start with a blank line, or with `gap` instead.
+local function offlineNote(result, gap)
     if result.offline == 0 then return "" end
-    return "\n\n" .. plural(result.offline, "storage chest") .. " didn't respond."
+    return (gap or "\n\n") .. plural(result.offline, "storage chest") .. " didn't respond."
 end
 
-local function indexNote(result)
+local function indexNote(result, gap)
     if not result.indexError then return "" end
-    return "\n\nThe item index wasn't saved: " .. result.indexError
+    return (gap or "\n\n") .. "The item index wasn't saved: " .. result.indexError
 end
 
 local function rebuildIndex(config)
@@ -382,76 +383,71 @@ local function storeAll(config)
     ui.message(TITLE, storedText(result), result.left > 0 and ui.theme.bad or ui.theme.good)
 end
 
--- Show what was recalled, with the return button as the only way on.
-local function waitForReturn(text)
-    ui.screen(TITLE)
-    ui.text(text, ui.theme.good)
-    ui.text("")
-    local width = term.getSize()
-    local _, y = term.getCursorPos()
-    local label = " Return items to storage"
-    ui.at(1, y, label:sub(1, width) .. string.rep(" ", width - #label), ui.theme.selectFg, ui.theme.selectBg)
-    ui.at(2, y + 1, "Press Enter or click", ui.theme.dim)
-
-    while true do
-        local event, a, _, clickY = os.pullEvent()
-        if event == "key" and (a == keys.enter or a == keys.numPadEnter) then return end
-        if event == "mouse_click" and clickY == y then return end
-    end
+-- "100", or "100 (1s+36)" once there's at least a stack, in the stacks that chooseAmount takes.
+local function countLabel(item)
+    local stack = item.stack
+    if not stack or stack <= 1 or item.count < stack then return tostring(item.count) end
+    local extra = item.count % stack
+    return item.count .. " (" .. math.floor(item.count / stack) .. "s" .. (extra > 0 and "+" .. extra or "") .. ")"
 end
 
-local function recallItem(config, item)
-    ui.screen(TITLE)
+-- Recall `amount` of `item`. Returns what happened and its colour, or nil if the I/O chest has gone.
+local function recallItem(config, item, amount)
+    ui.screen(TITLE .. " - Recall")
     ui.text("Recalling " .. item.name .. "...")
-    local result = array.recall(config, item.key, progressBar())
-    if not result then return ui.message(TITLE, NO_IO, ui.theme.bad) end
-    if result.moved == 0 then
-        local reason = result.left > 0 and "The I/O chest is full." or "There are none left in storage."
-        return ui.message(TITLE, "Nothing was recalled. " .. reason .. offlineNote(result) .. indexNote(result),
-            ui.theme.bad)
+    local result = array.recall(config, item.key, amount, progressBar())
+    if not result then
+        ui.message(TITLE, NO_IO, ui.theme.bad)
+        return nil
     end
 
-    local text = "Recalled " .. result.moved .. " " .. item.name .. "."
-    if result.left > 0 then text = text .. " The I/O chest is full, so " .. result.left .. " stayed in storage." end
-    waitForReturn(text .. "\n\nTake what you need from the I/O chest." .. offlineNote(result))
-
-    ui.screen(TITLE)
-    ui.text("Returning items...")
-    local returned = array.store(config, item.key, result.moved, progressBar())
-    if not returned then return ui.message(TITLE, NO_IO, ui.theme.bad) end
-    ui.message(TITLE, storedText(returned), returned.left > 0 and ui.theme.bad or ui.theme.good)
+    local text, color = "Recalled " .. result.moved .. " " .. item.name .. ".", ui.theme.good
+    if result.moved == 0 then
+        text = "Nothing was recalled. " .. (result.full and "The I/O chest is full." or "There are none left in storage.")
+        color = ui.theme.bad
+    elseif result.full then
+        text = text .. " The I/O chest is full"
+        text = text .. (result.left > 0 and ", so " .. result.left .. " stayed in storage." or ".")
+        color = ui.theme.bad
+    elseif amount and result.left == 0 then
+        text = text .. " That's all there were."
+    end
+    return text .. offlineNote(result, " ") .. indexNote(result, " "), color
 end
 
--- Filter `stored` as the user types. Returns the chosen item, or nil if they cancelled.
-local function chooseItem(stored, offline)
+-- Filter `stored` as the user types. Returns the chosen item, or nil if they cancelled. `status` is
+-- what the last recall did, shown until the user starts typing.
+local function chooseItem(stored, offline, status, statusColor)
     local LABEL = "Item: "
-    local FIRST_ROW = 5
     local text, found = "", stored
     local selected, top = 1, 1
 
     local function setText(value)
         text, found = value, array.match(stored, value)
-        selected, top = 1, 1
+        selected, top, status = 1, 1, nil
     end
 
     term.setCursorBlink(true)
     while true do
         local width, height = term.getSize()
+        local statusLines = status and ui.wrap(status, width - 2) or {}
+        local firstRow = 5 + (status and #statusLines + 1 or 0)
         local lastRow = height - 2
-        local rows = math.max(1, lastRow - FIRST_ROW + 1)
+        local rows = math.max(1, lastRow - firstRow + 1)
         if selected < top then top = selected end
         if selected >= top + rows then top = selected - rows + 1 end
 
         ui.screen(TITLE .. " - Recall", #found .. "/" .. #stored)
+        for i, line in ipairs(statusLines) do ui.at(2, 4 + i, line, statusColor) end
         for i = 0, rows - 1 do
             local item = found[top + i]
             if not item then break end
             local chosen = top + i == selected
-            local label = (item.name .. " x" .. item.count):sub(1, width - 2)
-            ui.at(1, FIRST_ROW + i, " " .. label .. string.rep(" ", width - #label - 1),
+            local label = (item.name .. " x" .. countLabel(item)):sub(1, width - 2)
+            ui.at(1, firstRow + i, " " .. label .. string.rep(" ", width - #label - 1),
                 chosen and ui.theme.selectFg or ui.theme.fg, chosen and ui.theme.selectBg or ui.theme.bg)
         end
-        if #found == 0 then ui.at(2, FIRST_ROW, "Nothing matches that.", ui.theme.bad) end
+        if #found == 0 then ui.at(2, firstRow, "Nothing matches that.", ui.theme.bad) end
         if text == "" then ui.at(2, height - 1, "Backspace: cancel", ui.theme.dim) end
 
         local hint = found[selected] and found[selected].id
@@ -492,7 +488,7 @@ local function chooseItem(stored, offline)
         elseif event == "mouse_scroll" and #found > 0 then
             selected = math.max(1, math.min(#found, selected + a))
         elseif event == "mouse_click" then
-            local item = c >= FIRST_ROW and c <= lastRow and found[top + c - FIRST_ROW]
+            local item = c >= firstRow and c <= lastRow and found[top + c - firstRow]
             if item then
                 term.setCursorBlink(false)
                 return item
@@ -501,18 +497,79 @@ local function chooseItem(stored, offline)
     end
 end
 
-local function recall(config)
-    ui.screen(TITLE .. " - Recall")
-    ui.text("Searching...")
-    local stored, offline, indexError = array.items(config, progressBar())
-    if #stored == 0 then
-        local result = { offline = offline, indexError = indexError }
-        local text = "There's nothing in storage." .. offlineNote(result) .. indexNote(result)
-        return ui.message(TITLE, text, ui.theme.bad)
-    end
+-- Ask how many of `item` to recall. Returns { count = n } or { stacks = n }, nil to fill the I/O
+-- chest, or false if the user went back. Only a number, with an s after it for stacks, can be typed.
+local function chooseAmount(item)
+    local LABEL = "Amount: "
+    local stack = item.stack or 64
+    local text = ""
 
-    local item = chooseItem(stored, offline)
-    if item then recallItem(config, item) end
+    term.setCursorBlink(true)
+    while true do
+        local _, height = term.getSize()
+        ui.screen(TITLE .. " - Recall")
+        ui.text(item.name .. " x" .. countLabel(item), ui.theme.accent)
+        ui.text("")
+        ui.text("")
+        ui.text("")
+        ui.text("Type how many, or leave it empty to fill the I/O chest.", ui.theme.dim)
+        ui.text("Add s for stacks: 2s is " .. 2 * stack .. ".", ui.theme.dim)
+        if text == "" then ui.at(2, height - 1, "Backspace: back", ui.theme.dim) end
+        ui.at(2, 5, LABEL, ui.theme.accent)
+        ui.at(2 + #LABEL, 5, text)
+
+        local event, a, b = os.pullEvent()
+        if event == "char" or event == "paste" then
+            for letter in a:gmatch(".") do
+                local stacks = text:find("s", 1, true)
+                if letter:find("%d") and not stacks and #text < 6 and not (text == "" and letter == "0") then
+                    text = text .. letter
+                elseif letter:lower() == "s" and text ~= "" and not stacks then
+                    text = text .. "s"
+                end
+            end
+        elseif event == "key" then
+            if a == keys.backspace then
+                if text ~= "" then
+                    text = text:sub(1, -2)
+                elseif not b then
+                    term.setCursorBlink(false)
+                    return false
+                end
+            elseif a == keys.enter or a == keys.numPadEnter then
+                term.setCursorBlink(false)
+                if text == "" then return nil end
+                local number = tonumber(text:match("%d+"))
+                return text:find("s", 1, true) and { stacks = number } or { count = number }
+            end
+        end
+    end
+end
+
+-- Recall items one after another, until the user goes back. They stay in the I/O chest until Store all.
+local function recall(config)
+    local status, statusColor
+    while true do
+        ui.screen(TITLE .. " - Recall")
+        ui.text("Searching...")
+        local stored, offline, indexError = array.items(config, progressBar())
+        if #stored == 0 then
+            local result = { offline = offline, indexError = indexError }
+            local text = status and status .. "\n\nThere's nothing left in storage." or "There's nothing in storage."
+            return ui.message(TITLE, text .. offlineNote(result) .. indexNote(result), statusColor or ui.theme.bad)
+        end
+
+        local amount
+        repeat
+            local item = chooseItem(stored, offline, status, statusColor)
+            if not item then return end
+            amount = chooseAmount(item)
+            if amount ~= false then
+                status, statusColor = recallItem(config, item, amount)
+                if not status then return end
+            end
+        until amount ~= false
+    end
 end
 
 local function main()

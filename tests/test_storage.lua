@@ -62,7 +62,9 @@ local function total(c, name)
 end
 
 -- Like the game, an inventory reached by its side can only see sides, and one reached over the
--- network can only see that network. `world.gone` names chests that have stopped answering.
+-- network can only see that network. `world.gone` names chests that have stopped answering, and
+-- `world.stacks` gives item ids a stack size other than 64. `world.names` and `world.enchantments`
+-- give items with that NBT a display name and enchantments.
 local function fakePeripherals(env, world)
   local real = env.peripheral
   local function isSide(name) return world.sides[name] ~= nil end
@@ -144,7 +146,15 @@ local function fakePeripherals(env, world)
       end
       if method == "getItemDetail" then
         local item = chestOf(name).slots[a]
-        return item and { name = item.name, count = item.count, displayName = item.nbt and "Named " .. item.nbt }
+        world.details = (world.details or 0) + 1
+        return item and {
+          name = item.name, count = item.count,
+          displayName = world.names and world.names[item.nbt]
+            or (item.name == "minecraft:enchanted_book" and "Enchanted Book")
+            or (item.nbt and "Named " .. item.nbt),
+          maxCount = world.stacks and world.stacks[item.name] or STACK,
+          enchantments = world.enchantments and world.enchantments[item.nbt],
+        }
       end
       if method == "pushItems" then return push(name, a, b, limit) end
       error("No such method " .. method, 0)
@@ -187,6 +197,14 @@ local function recallFirst(c, search)
   key(c, "enter")
   screenHas(c, "Item:")
   typed(c, search)
+end
+
+-- Pick the highlighted item, and recall `amount` of it, or fill the I/O chest if that's nil.
+local function pick(c, amount)
+  key(c, "enter")
+  screenHas(c, "Amount:")
+  typed(c, amount or "")
+  key(c, "enter")
 end
 
 -- First run ----------------------------------------------------------------------------------------
@@ -511,15 +529,10 @@ do
   check("recall bar: searching reads the chests", saw(seen2, "Read 1 of 2 chests"))
   screenHas(c2, "A x128")
   for i = #seen2, 1, -1 do seen2[i] = nil end
-  key(c2, "enter")
+  pick(c2)
   screenHas(c2, "Recalled 128 A")
   check("recall bar: says what it's doing", saw(seen2, "Recalling A"))
   check("recall bar: moves the stacks", saw(seen2, "Moved 1 of 2 stacks"))
-  for i = #seen2, 1, -1 do seen2[i] = nil end
-  key(c2, "enter")
-  screenHas(c2, "Stored 128 items")
-  check("return bar: says what it's doing", saw(seen2, "Returning items"))
-  check("return bar: moves the stacks", saw(seen2, "Moved 1 of 2 stacks"))
 
   local c3 = ready(chest(27, { { "x:a", 1 }, { "x:b", 1 } }), chest(27, { { "x:a", 1 } }), chest(27))
   local steps = {}
@@ -531,6 +544,23 @@ do
   end)
   check("store bar: counts only what it'll move",
     table.concat(steps, " ") == "0/2chest 1/2chest 2/2chest 0/1stack 1/1stack")
+
+  -- Recalling counts only the stacks it needs, and finishes the bar when the I/O chest fills up.
+  local function recallSteps(ioChest, a, amount)
+    local c4 = ready(ioChest, a, chest(27))
+    local recallSteps = {}
+    sim.call(c4, function()
+      local array = c4.env.require("array")
+      array.recall({ io = "io", allowed = { a = true, b = true } }, "x:a#nil", amount, function(done, total, kind)
+        if kind == "stack" then recallSteps[#recallSteps + 1] = done .. "/" .. total end
+      end)
+    end)
+    return table.concat(recallSteps, " ")
+  end
+  check("recall bar: only the stacks it needs",
+    recallSteps(chest(27), chest(27, { { "x:a", 64 }, { "x:a", 64 }, { "x:a", 64 } }), { count = 70 }) == "0/2 1/2 2/2")
+  check("recall bar: ends when the chest is full",
+    recallSteps(chest(1), chest(27, { { "x:a", 64 }, { "x:a", 64 }, { "x:a", 64 } })) == "0/3 1/3 3/3")
 end
 
 -- Recalling ----------------------------------------------------------------------------------------
@@ -544,49 +574,102 @@ do
   screenHas(c, "1/2")
   check("search: matches the readable name", screenHas(c, "Iron Ingot x100"))
   check("search: leaves out others", not c.screenText():find("Dirt", 1, true))
-  key(c, "enter")
+  pick(c)
   check("recall: reports", screenHas(c, "Recalled 100 Iron Ingot."))
   check("recall: all of them", total(io, "minecraft:iron_ingot") == 100 and total(a, "minecraft:iron_ingot") == 0)
-  check("recall: highlights return", screenHas(c, "Return items to storage"))
-  key(c, "backspace")
-  c.env.os.queueEvent("char", "q")
+  check("recall: back to the list", screenHas(c, "Item:") and screenHas(c, "Dirt x5"))
+  check("recall: gone from the list", not c.screenText():find("Iron Ingot x", 1, true))
+  typed(c, "d")
   sim.advance(1)
-  check("recall: return is the only way on", screenHas(c, "Return items to storage"))
-
-  -- Someone takes some out.
-  io.slots[1] = nil
-  key(c, "enter")
-  check("return: reports", screenHas(c, "Stored 36 items"))
-  check("return: back in the array", total(io) == 0 and total(a) + total(b) == 41)
-  key(c, "enter")
-  check("return: on to the menu", screenHas(c, "Store all"))
+  check("recall: typing clears the report", not c.screenText():find("Recalled", 1, true))
+  key(c, "backspace") key(c, "backspace")
+  check("recall: back to the menu", screenHas(c, "Store all"))
+  check("recall: items stay in the I/O chest", total(io, "minecraft:iron_ingot") == 100)
 end
 
--- Stops when the chest is full, and only returns what it recalled.
+-- Several items can be recalled one after another.
+do
+  local io = chest(27)
+  local a = chest(27, { { "minecraft:iron_ingot", 10 }, { "minecraft:stick", 5 }, { "minecraft:coal", 8 } })
+  local c = ready(io, a, chest(27))
+  recallFirst(c, "iron")
+  pick(c)
+  screenHas(c, "Recalled 10 Iron Ingot.")
+  typed(c, "stick")
+  screenHas(c, "Stick x5")
+  pick(c, "3")
+  check("several: reports the second", screenHas(c, "Recalled 3 Stick."))
+  check("several: shows what's left", screenHas(c, "Stick x2"))
+  check("several: both in the I/O chest", total(io, "minecraft:iron_ingot") == 10 and total(io, "minecraft:stick") == 3)
+end
+
+-- Stops when the chest is full.
 do
   local io = chest(2, { { "minecraft:dirt", 7 } })
   local a = chest(27, { { "minecraft:iron_ingot", 64 }, { "minecraft:iron_ingot", 64 }, { "minecraft:iron_ingot", 64 } })
   local c = ready(io, a, chest(27))
   recallFirst(c, "IRON")
   screenHas(c, "Iron Ingot x192")
-  key(c, "enter")
+  pick(c)
   check("full: stops at the chest's size", screenHas(c, "Recalled 64 Iron Ingot."))
   check("full: says what's left", screenHas(c, "128 stayed in storage"))
   check("full: left in storage", total(a) == 128 and total(io, "minecraft:dirt") == 7)
-  c.env.os.queueEvent("mouse_click", 1, 5, rowOf(c, "Return items"))
-  check("return by click", screenHas(c, "Stored 64 items"))
-  check("return: leaves what was already there", total(a) == 192 and total(io, "minecraft:dirt") == 7)
 end
 
--- A full chest recalls nothing, so there's nothing to return.
+-- A full chest recalls nothing.
 do
   local c = ready(chest(1, { { "minecraft:dirt", 64 } }), chest(27, { { "minecraft:stone", 3 } }), chest(27))
   recallFirst(c, "stone")
   screenHas(c, "Stone x3")
-  key(c, "enter")
+  pick(c)
   check("recall into a full chest", screenHas(c, "The I/O chest is full"))
+  check("recall into a full chest: still listed", screenHas(c, "Stone x3"))
+end
+
+-- How many to recall: a number of items, or of stacks with an s after it, smallest stacks first.
+do
+  local io = chest(27)
+  local a = chest(27, { { "minecraft:iron_ingot", 64 }, { "minecraft:iron_ingot", 10 }, { "minecraft:iron_ingot", 64 } })
+  local b = chest(27, { { "minecraft:iron_ingot", 36 } })
+  local c = ready(io, a, b)
+  recallFirst(c, "iron")
+  check("stacks: shown in the list", screenHas(c, "Iron Ingot x174 (2s+46)"))
   key(c, "enter")
-  check("recall into a full chest: back to the menu", screenHas(c, "Store all"))
+  check("amount: asked", screenHas(c, "Amount:"))
+  check("amount: explains stacks", screenHas(c, "2s is 128"))
+  typed(c, "0s12s3x")
+  check("amount: only a number and an s", screenHas(c, "Amount: 12s") and not c.screenText():find("12s3", 1, true))
+  key(c, "backspace") key(c, "backspace") key(c, "backspace")
+  typed(c, "40")
+  key(c, "enter")
+  check("amount: that many", screenHas(c, "Recalled 40 Iron Ingot."))
+  check("amount: smallest stacks first", total(io) == 40 and a.slots[2] == nil and total(b) == 6 and total(a) == 128)
+
+  pick(c, "1s")
+  check("amount: a stack", screenHas(c, "Recalled 64 Iron Ingot."))
+  check("amount: a stack from the smallest", total(io) == 104 and total(b) == 0 and total(a) == 70)
+
+  pick(c, "500")
+  check("amount: more than there are", screenHas(c, "Recalled 70 Iron Ingot. That's all there were."))
+  check("amount: all of them", total(io) == 174)
+end
+
+-- Backspace goes back from the amount to the list, and an item that doesn't stack isn't counted in stacks.
+do
+  local io = chest(27)
+  local a = chest(27, { { "minecraft:diamond_sword", 1 }, { "minecraft:diamond_sword", 1 }, { "minecraft:diamond_sword", 1 } })
+  local c, world = ready(io, a, chest(27))
+  world.stacks = { ["minecraft:diamond_sword"] = 1 }
+  recallFirst(c, "sword")
+  check("unstackable: no stacks shown", screenHas(c, "Diamond Sword x3") and not c.screenText():find("(3s)", 1, true))
+  key(c, "enter")
+  check("unstackable: a stack is one", screenHas(c, "2s is 2."))
+  typed(c, "1")
+  key(c, "backspace") key(c, "backspace")
+  check("amount: backspace goes back", screenHas(c, "Item:"))
+  check("amount: nothing recalled", total(io) == 0)
+  pick(c, "2s")
+  check("unstackable: stacks of one", screenHas(c, "Recalled 2 Diamond Sword."))
 end
 
 -- Items that differ by NBT are told apart, and renamed ones can be found by their name.
@@ -598,9 +681,38 @@ do
   screenHas(c, "1/2")
   check("nbt: found by display name", screenHas(c, "Named bbb x1"))
   check("nbt: only that one", not c.screenText():find("Named aaa", 1, true))
-  key(c, "enter")
+  pick(c)
   screenHas(c, "Recalled 1 Named bbb")
   check("nbt: moved the right one", io.slots[1].nbt == "bbb" and a.slots[1].nbt == "aaa")
+end
+
+-- Enchanted books are named after what's on them.
+do
+  local BOOK = "minecraft:enchanted_book"
+  local io = chest(27)
+  local a = chest(27, { { BOOK, 1, "s5" }, { BOOK, 1, "mu" }, { BOOK, 1, "lucky" }, { BOOK, 1, "odd" } })
+  local c, world = ready(io, a, chest(27))
+  world.enchantments = {
+    s5 = { { name = "minecraft:sharpness", level = 5, displayName = "Sharpness V" } },
+    mu = {
+      { name = "minecraft:mending", level = 1, displayName = "Mending" },
+      { name = "minecraft:unbreaking", level = 3, displayName = "Unbreaking III" },
+    },
+    lucky = { { name = "minecraft:fortune", level = 3, displayName = "Fortune III" } },
+    odd = { { name = "minecraft:frost_walker", level = 2 } },
+  }
+  world.names = { lucky = "Lucky" }
+  recallFirst(c, "")
+  check("book: its enchantment", screenHas(c, "Book: Sharpness V x1"))
+  check("book: all of them", screenHas(c, "Book: Mending, Unbreaking III x1"))
+  check("book: renamed", screenHas(c, "Lucky (Fortune III) x1"))
+  check("book: no display name", screenHas(c, "Book: Frost Walker 2 x1"))
+  typed(c, "mending")
+  screenHas(c, "1/4")
+  check("book: found by enchantment", screenHas(c, "Book: Mending, Unbreaking III"))
+  pick(c)
+  check("book: recalled", screenHas(c, "Recalled 1 Book: Mending, Unbreaking III."))
+  check("book: the right one", total(io) == 1 and io.slots[1].nbt == "mu")
 end
 
 do
@@ -649,7 +761,7 @@ do
   key(c, "backspace")
   key(c, "down")
   screenHas(c, "minecraft:string")
-  key(c, "enter")
+  pick(c)
   check("enter recalls the highlighted one", screenHas(c, "Recalled 4 String"))
   check("recall: moved it", total(io, "minecraft:string") == 4 and total(io, "minecraft:iron_ingot") == 0)
 end
@@ -680,6 +792,8 @@ do
   check("scrolls to the highlight", screenHas(c, "Item16 x16"))
   check("scrolls the top away", not c.screenText():find("Item01", 1, true))
   c.env.os.queueEvent("mouse_click", 1, 5, rowOf(c, "Item16 x16"))
+  screenHas(c, "Amount:")
+  key(c, "enter")
   check("click picks the row", screenHas(c, "Recalled 16 Item16"))
 end
 
@@ -746,6 +860,14 @@ do
   recallFirst(c, "")
   screenHas(c, "B x2")
   check("index: not read again", world.lists == lists)
+  check("index: keeps stack sizes", c.files[INDEX]:find("\ns %d+ 64\n") ~= nil)
+  key(c, "backspace")
+  local details = world.details
+  a.slots[1].count = 70
+  settings(c)
+  menuTo(c, "Rebuild item index")
+  screenHas(c, "Counted")
+  check("index: stack sizes aren't asked for again", world.details == details)
 end
 
 -- Storing and recalling keep it up to date, reading only the chests they touched.
@@ -766,14 +888,10 @@ do
   recallFirst(c, "new")
   check("index: knows what was stored", screenHas(c, "New x7"))
   check("index: without reading", world.lists == lists)
-  key(c, "enter")
+  pick(c)
   screenHas(c, "Recalled 7 New")
   check("index: recall checks the chest that holds it", world.lists - lists == 1)
-  io.slots = {}
-  key(c, "enter")
-  screenHas(c, "Stored 0 items")
-  backToMenu(c)
-  recallFirst(c, "new")
+  typed(c, "new")
   check("index: knows it was taken", screenHas(c, "Nothing matches that"))
 end
 
@@ -788,12 +906,10 @@ do
   a.slots[1] = { name = "x:z", count = 3 }
   recallFirst(c, "a")
   screenHas(c, "A x20")
-  key(c, "enter")
+  pick(c)
   check("stale: recalls what's really there", screenHas(c, "Recalled 10 A."))
   check("stale: only that item", total(io, "x:a") == 10 and total(io, "x:z") == 0)
-  key(c, "enter")
-  backToMenu(c)
-  recallFirst(c, "z")
+  typed(c, "z")
   check("stale: the index is corrected", screenHas(c, "Z x3"))
 end
 
@@ -850,6 +966,23 @@ do
   check("re-ticked: saved", config(c).allowed.b)
   recallFirst(c, "")
   check("re-ticked: read again", screenHas(c, "Changed x2"))
+end
+
+-- A book already in the index as a plain Enchanted Book is named again when its chest is read.
+do
+  local BOOK = "minecraft:enchanted_book"
+  local c, world = ready(chest(27), chest(27, { { BOOK, 1, "s5" } }), chest(27))
+  recallFirst(c, "")
+  check("old book: plain before", screenHas(c, "Enchanted Book x1"))
+  key(c, "backspace")
+  world.enchantments = { s5 = { { name = "minecraft:sharpness", level = 5, displayName = "Sharpness V" } } }
+  settings(c)
+  menuTo(c, "Rebuild item index")
+  screenHas(c, "Counted")
+  key(c, "enter")
+  key(c, "backspace")
+  recallFirst(c, "")
+  check("old book: named after a rebuild", screenHas(c, "Book: Sharpness V x1"))
 end
 
 -- On a network drive -------------------------------------------------------------------------------

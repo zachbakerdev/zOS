@@ -263,14 +263,21 @@ chests touching the computer are used instead.
 **Store all** empties the I/O chest into storage. **Recall item** lists what's stored and narrows the
 list as you type, matching letters of the name or item id in order, so `irin` finds Iron Ingot. The up
 and down arrows move the highlight, which starts on the best match, Enter picks it, and Backspace
-cancels once the text is empty. The app then fills the I/O chest with that item until it's full or
-there are none left. Take what you need, then
-press **Return items to storage**, which puts back what's left of the recalled items. It's the only
-way on from that screen. If the app is stopped first, the items stay in the I/O chest until the next
-**Store all**.
+cancels once the text is empty. The list shows how many of each item there are, and how many stacks
+once there's at least one, so `Iron Ingot x100 (1s+36)` is one stack and 36 more.
+
+After picking an item, type how many to recall: a number of items, such as `40`, or of stacks with an
+`s` after it, such as `2s`. Leave it empty to fill the I/O chest. Backspace goes back to the list. The
+smallest stacks are taken first, so storage gets its slots back. The app moves the items until it has
+recalled that many, the I/O chest is full, or there are none left, and then goes back to the list with
+what it did written above it, so you can recall another item. The items stay in the I/O chest until you
+take them or press **Store all**.
 
 Settings live in `/etc/storage/` and belong to the computer, so anyone who can log in can use the app
 and change them. Items with different NBT, such as damaged or enchanted tools, are listed separately.
+Enchanted books are named after what's on them, such as `Book: Mending, Unbreaking III`, so searching
+for an enchantment finds them. Books stored by an earlier version show the new name once their chest
+is read again, or after **Rebuild item index**.
 
 ### Minesweeper
 

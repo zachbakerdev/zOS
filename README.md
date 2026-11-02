@@ -162,6 +162,7 @@ folder under `apps/`.
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 | [`apps/storage`](apps/storage) | **Storage** | Searches chests on a wired network and moves items in and out through one chest, see [Storage](#storage) |
+| [`apps/minesweeper`](apps/minesweeper) | **Minesweeper** | The classic game, see [Minesweeper](#minesweeper) |
 | [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy, writes the latest release's installer and image to it with any root servers you choose, and labels it `zOS vX.X.X` |
 
 ### Making app disks
@@ -256,6 +257,24 @@ way on from that screen. If the app is stopped first, the items stay in the I/O 
 
 Settings live in `/etc/storage/` and belong to the computer, so anyone who can log in can use the app
 and change them. Items with different NBT, such as damaged or enchanted tools, are listed separately.
+
+### Minesweeper
+
+**Minesweeper** has three levels: Easy (9x9, 10 mines), Medium (16x16, 40) and Hard (30x16, 99). A
+level too big for the screen, such as Hard on a pocket computer, is cut down to fit with the same
+share of mines, and keeps its own best time. The first cell you open is always safe, and so are the
+cells around it.
+
+| action | keyboard | mouse |
+|--------|----------|-------|
+| Move | Arrow keys | |
+| Open a cell | Space or Enter | Left click |
+| Flag a cell | F | Right click |
+| Open around a number with enough flags | Space or Enter on the number | Left or middle click on the number |
+| New game | R | |
+| Back to the levels | Q or Backspace | |
+
+Best times belong to each user, in `/home/<user>/.config/minesweeper/`.
 
 ## Networking
 

@@ -1,0 +1,6 @@
+{
+    name = "Minesweeper",
+    description = "Clear the board without hitting a mine",
+    version = "1.0.0",
+    author = "zOS",
+}

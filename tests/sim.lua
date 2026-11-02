@@ -234,7 +234,7 @@ function sim.computer(id, opts)
   env.window = { create = function() return env.term end }
   env.colors = setmetatable({}, { __index = function() return 1 end })
   env.keys = { up = 200, down = 208, home = 199, ["end"] = 207, enter = 28, numPadEnter = 156, backspace = 14,
-    pageUp = 201, pageDown = 209 }
+    pageUp = 201, pageDown = 209, left = 203, right = 205, space = 57, f = 33, q = 16, r = 19 }
   env.peripheral = {
     getNames = function()
       local names = {}

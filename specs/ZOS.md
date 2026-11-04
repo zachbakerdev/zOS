@@ -14,6 +14,7 @@ Related specifications:
 - [ZA_FORMAT.md](formats/ZA_FORMAT.md): the .za app image format.
 - [APP_STANDARDS.md](APP_STANDARDS.md): where apps keep their files.
 - [APPMAN.md](APPMAN.md): the `appman` command.
+- [ARCHIVES.md](ARCHIVES.md): the `tar`, `gzip` and `gunzip` commands.
 
 Each system library has its own specification:
 
@@ -41,7 +42,7 @@ Each system library has its own specification:
 | `/.zos/boot.lua`               | The boot sequence                                       |
 | `/.zos/lib/`                   | System libraries                                        |
 | `/.zos/sys/`                   | System screens: setup, login, desktop, settings and recovery |
-| `/.zos/bin/`                   | Shell programs, such as `appman`                        |
+| `/.zos/bin/`                   | Shell programs: `appman`, `tar`, `gzip` and `gunzip`    |
 | `/.zos/apps/<id>/`             | Installed apps                                          |
 | `/etc/zos/`                    | System data                                             |
 | `/etc/<id>/`                   | Each app's global data                                  |

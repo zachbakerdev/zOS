@@ -115,6 +115,7 @@ local function newFs(files)
   end
   return fs
 end
+sim.newFs = newFs
 
 local function newTerm(computer)
   local w, h = computer.width or 51, 19

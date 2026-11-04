@@ -123,7 +123,7 @@ The folders are in `/etc/zos/update/`. Downloaded and finished updates are logge
 | app             | what it does |
 |-----------------|--------------|
 | **Files**       | Browse folders; create, edit, copy, move and delete files and folders. Users who aren't admins stay in their home folder. To run a program, use the Terminal |
-| **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session |
+| **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session. Adds `tar`, `gzip` and `gunzip` ([ARCHIVES.md](specs/ARCHIVES.md)) |
 | **App Manager** | Admin only. Install and remove apps |
 
 These can be upgraded but not removed, and they're listed on the desktop under **Apps**, which
@@ -585,7 +585,7 @@ src/                      mirrors the target computer
   startup.lua             -> /startup.lua
   .zos/                   -> /.zos
     boot.lua              boot stages and the session loop
-    bin/                  shell programs, such as appman
+    bin/                  shell programs: appman, tar, gzip and gunzip
     lib/                  system libraries
     sys/                  login, desktop, settings, setup and recovery screens
 ```
@@ -604,6 +604,7 @@ differ, they are the target.
 | [ZI_FORMAT.md](specs/formats/ZI_FORMAT.md) | The legacy .zi system image format |
 | [ZR_FORMAT.md](specs/formats/ZR_FORMAT.md) | The .zr file of root servers on a setup disk |
 | [APPMAN.md](specs/APPMAN.md) | The `appman` command |
+| [ARCHIVES.md](specs/ARCHIVES.md) | The `tar`, `gzip` and `gunzip` commands |
 | [specs/libs/](specs/libs) | One specification per system library, listed in [ZOS.md](specs/ZOS.md) |
 
 ## Limitations

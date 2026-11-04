@@ -1,9 +1,9 @@
 --[==[
 tar.lua -- pure Lua tar archive library (POSIX.1-1988 ustar / POSIX.1-2001 pax).
 
-Works on Lua 5.1 - 5.4 with no dependencies. Optional:
+Works on Lua 5.1 - 5.4 and CC: Tweaked, on strings only: there is no file
+access. Optional:
   * compression.lua  -- transparent .tar.gz reading and writing
-  * lfs (LuaFileSystem) -- directories, symlinks, mode/mtime on disk
 
 Writing produces POSIX pax archives: plain ustar headers, plus a pax
 extended header ('x') only for entries whose metadata does not fit in ustar
@@ -46,40 +46,17 @@ API
   tar.parse(archive [, opts])           -> entries, global_pax | nil, errmsg
       gzip input is detected and decompressed automatically.
       opts.strict       require the two-block end-of-archive marker
-
-  tar.list(archive)                     -> array of names | nil, errmsg
-
-  tar.fileEntry(path [, name])          -> entry | nil, errmsg
-      Build an entry from a file on disk (mode/mtime/type need lfs).
-
-  tar.packFiles(outpath, paths [, opts])    -> true | nil, errmsg
-      Archive the given files (and, with lfs, directories recursively).
-      Gzips automatically when outpath ends in .gz / .tgz (opts.gzip = false
-      to disable). opts are passed on to tar.create.
-
-  tar.extract(archive_or_entries, destdir [, opts]) -> true, skipped | nil, errmsg
-      Extract into destdir (default "."). Leading "/" is stripped; entries
-      containing ".." or passing through an extracted symlink are skipped
-      unless opts.unsafe is true. Hard links are extracted as copies.
-      Symlinks need lfs. Devices and FIFOs are skipped. `skipped` is an
-      array of { name = ..., reason = ... }.
-
-  tar.extractFile(tarpath [, destdir [, opts]]) -> true, skipped | nil, errmsg
 ]==]
 
 local byte, char, sub, find, rep = string.byte, string.char, string.sub, string.find, string.rep
 local format = string.format
 local concat, sort = table.concat, table.sort
 local floor = math.floor
-local unpack = table.unpack
 
 local tar = { _VERSION = "1.0.0" }
 
 local BLOCK = 512
 local ZERO_BLOCK = rep("\0", BLOCK)
-
-local has_lfs, lfs = pcall(require, "lfs")
-if not has_lfs then lfs = nil end
 
 ---------------------------------------------------------------------------
 -- Error handling (same convention as compression.lua)
@@ -657,243 +634,6 @@ end
 function tar.parse(s, opts)
     if type(s) ~= "string" then error("tar.parse: expected string", 2) end
     return protect(parse_impl, s, opts or {})
-end
-
-function tar.list(s)
-    local entries, err = tar.parse(s)
-    if not entries then return nil, err end
-    local names = {}
-    for i, e in ipairs(entries) do names[i] = e.name end
-    return names
-end
-
----------------------------------------------------------------------------
--- Filesystem helpers
----------------------------------------------------------------------------
-
-local IS_WINDOWS = package.config:sub(1, 1) == "\\"
-
-local function read_file(path)
-    local f, err = io.open(path, "rb")
-    if not f then return nil, err end
-    local data, rerr = f:read("*a")
-    f:close()
-    if not data then return nil, path .. ": " .. tostring(rerr) end
-    return data
-end
-
-local function write_file(path, data)
-    local f, err = io.open(path, "wb")
-    if not f then return nil, err end
-    local ok, werr = f:write(data)
-    f:close()
-    if not ok then return nil, werr end
-    return true
-end
-
-local function perms_to_mode(p)
-    -- lfs permissions string, e.g. "rwxr-xr-x"
-    local m = 0
-    for i = 1, 9 do
-        m = m * 2 + ((sub(p, i, i) ~= "-") and 1 or 0)
-    end
-    return m
-end
-
-function tar.fileEntry(path, name)
-    -- Like tar(1), store paths relative: drop "./", drive letters and leading "/".
-    name = name or path:gsub("\\", "/"):gsub("^%a:", ""):gsub("^[./]+/", ""):gsub("^/+", "")
-    if lfs then
-        local attr = lfs.symlinkattributes and lfs.symlinkattributes(path) or lfs.attributes(path)
-        if not attr then return nil, "cannot stat " .. path end
-        local e = {
-            name = name,
-            mode = attr.permissions and perms_to_mode(attr.permissions) or nil,
-            mtime = attr.modification,
-            uid = attr.uid, gid = attr.gid,
-        }
-        if attr.mode == "directory" then
-            e.type = "directory"
-        elseif attr.mode == "link" then
-            e.type, e.linkname = "symlink", attr.target
-            if not e.linkname then return nil, "cannot read symlink " .. path end
-        elseif attr.mode == "file" then
-            local data, err = read_file(path)
-            if not data then return nil, err end
-            e.data = data
-        else
-            return nil, "unsupported file type (" .. tostring(attr.mode) .. "): " .. path
-        end
-        return e
-    end
-    local data, err = read_file(path)
-    if not data then return nil, err end
-    return { name = name, data = data }
-end
-
-local function collect(path, out)
-    local e, err = tar.fileEntry(path)
-    if not e then return nil, err end
-    out[#out + 1] = e
-    if e.type == "directory" and lfs then
-        local children = {}
-        for child in lfs.dir(path) do
-            if child ~= "." and child ~= ".." then children[#children + 1] = child end
-        end
-        sort(children)
-        for _, child in ipairs(children) do
-            local ok, cerr = collect(path:gsub("/$", "") .. "/" .. child, out)
-            if not ok then return nil, cerr end
-        end
-    end
-    return true
-end
-
-function tar.packFiles(outpath, paths, opts)
-    if type(paths) == "string" then paths = { paths } end
-    local o = {}
-    for k, v in pairs(opts or {}) do o[k] = v end
-    if o.gzip == nil and (outpath:match("%.[gG][zZ]$") or outpath:match("%.[tT][gG][zZ]$")) then
-        o.gzip = true
-    end
-    local entries = {}
-    for _, p in ipairs(paths) do
-        local ok, err = collect(p, entries)
-        if not ok then return nil, err end
-    end
-    local archive, err = tar.create(entries, o)
-    if not archive then return nil, err end
-    return write_file(outpath, archive)
-end
-
-local function shell_quote(s)
-    if IS_WINDOWS then return '"' .. s:gsub("/", "\\") .. '"' end
-    return "'" .. s:gsub("'", "'\\''") .. "'"
-end
-
-local made_dirs = {}
-
-local function mkdir_p(path)
-    if path == "" or path == "." or made_dirs[path] then return true end
-    if lfs then
-        local cur = sub(path, 1, 1) == "/" and "" or nil
-        for part in path:gmatch("[^/]+") do
-            cur = cur and (cur .. "/" .. part) or part
-            if lfs.attributes(cur, "mode") ~= "directory" then
-                local ok, err = lfs.mkdir(cur)
-                if not ok and lfs.attributes(cur, "mode") ~= "directory" then
-                    return nil, err
-                end
-            end
-        end
-    else
-        local cmd = IS_WINDOWS and ("mkdir " .. shell_quote(path) .. " 2>nul")
-                                or ("mkdir -p " .. shell_quote(path))
-        os.execute(cmd)
-    end
-    made_dirs[path] = true
-    return true
-end
-
--- Normalize an archive path to a safe relative path, or nil + reason.
-local function safe_relpath(name, unsafe)
-    local parts = {}
-    for part in name:gsub("\\", "/"):gmatch("[^/]+") do
-        if part == ".." then
-            if not unsafe then return nil, "path contains '..'" end
-            parts[#parts + 1] = part
-        elseif part ~= "." then
-            parts[#parts + 1] = part
-        end
-    end
-    if #parts == 0 then return nil, "empty path" end
-    return parts
-end
-
-local function extract_impl(src, destdir, opts)
-    local entries = src
-    if type(src) == "string" then
-        local err
-        entries, err = tar.parse(src)
-        if not entries then fail(err) end
-    end
-    destdir = (destdir or "."):gsub("/+$", "")
-    if destdir == "" then destdir = "/" end
-    made_dirs = {}
-    local ok, err = mkdir_p(destdir)
-    if not ok then fail(err) end
-
-    local skipped, written, links = {}, {}, {}
-    local function skip(e, reason) skipped[#skipped + 1] = { name = e.name, reason = reason } end
-
-    for _, e in ipairs(entries) do
-        local parts, why = safe_relpath(e.name, opts.unsafe)
-        if not parts and why == "empty path" and e.type == "directory" then
-            -- "./" or "/": the destination directory itself; nothing to do.
-        elseif not parts then
-            skip(e, why)
-        else
-            local rel = concat(parts, "/")
-            local through_link = false
-            if not opts.unsafe then
-                for i = 1, #parts - 1 do
-                    if links[concat(parts, "/", 1, i)] then through_link = true; break end
-                end
-            end
-            local full = (destdir == "/" and "" or destdir) .. "/" .. rel
-            local parent = full:match("^(.*)/[^/]*$") or "."
-
-            if through_link then
-                skip(e, "path passes through a symlink in the archive")
-            elseif e.type == "directory" then
-                local dok, derr = mkdir_p(full)
-                if not dok then fail(derr) end
-            elseif e.type == "file" or e.type == "contiguous" or e.type == "hardlink" then
-                local data = e.data
-                if e.type == "hardlink" then
-                    local tparts = safe_relpath(e.linkname or "", opts.unsafe)
-                    data = tparts and written[concat(tparts, "/")]
-                end
-                if not data then
-                    skip(e, "hard link target not extracted: " .. tostring(e.linkname))
-                else
-                    local dok, derr = mkdir_p(parent)
-                    if not dok then fail(derr) end
-                    os.remove(full)               -- never write through an existing symlink
-                    local wok, werr = write_file(full, data)
-                    if not wok then fail(werr) end
-                    written[rel] = data
-                    if lfs and lfs.touch and e.mtime then
-                        lfs.touch(full, e.atime or e.mtime, e.mtime)
-                    end
-                end
-            elseif e.type == "symlink" then
-                if lfs and lfs.link then
-                    local dok, derr = mkdir_p(parent)
-                    if not dok then fail(derr) end
-                    os.remove(full)
-                    local lok, lerr = lfs.link(e.linkname, full, true)
-                    if not lok then fail(lerr) end
-                    links[rel] = true
-                else
-                    skip(e, "symlinks require LuaFileSystem")
-                end
-            else
-                skip(e, e.type .. " entries are not extracted")
-            end
-        end
-    end
-    return true, skipped
-end
-
-function tar.extract(src, destdir, opts)
-    return protect(extract_impl, src, destdir, opts or {})
-end
-
-function tar.extractFile(tarpath, destdir, opts)
-    local data, err = read_file(tarpath)
-    if not data then return nil, err end
-    return tar.extract(data, destdir, opts)
 end
 
 return tar

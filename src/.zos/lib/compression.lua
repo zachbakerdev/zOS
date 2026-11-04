@@ -9,7 +9,7 @@ API
       opts.name        original file name (FNAME), must not contain "\0"
       opts.comment     file comment (FCOMMENT), must not contain "\0"
       opts.mtime       modification time, Unix seconds (default 0 = none)
-      opts.os          OS code (default 3 = Unix, 0 on Windows)
+      opts.os          OS code (default 3 = Unix)
       opts.text        set FTEXT flag (hint that data is text)
       opts.header_crc  include FHCRC (CRC16 of header)
       opts.extra       FEXTRA: raw string, or array of { id = "AB", data = "..." }
@@ -20,19 +20,7 @@ API
       header_crc }. Trailing zero padding is ignored; other trailing data
       is an error unless opts.ignore_trailing is true.
 
-  compression.deflate(data [, level])    -> raw DEFLATE stream
-  compression.inflate(deflated [, pos])  -> data, next_pos | nil, errmsg
-      next_pos is the index of the first byte after the DEFLATE stream.
-
   compression.crc32(data [, crc])        -> CRC-32 (running value optional)
-
-  compression.compressFile(inpath [, outpath [, opts]])   -> true | nil, err
-      outpath defaults to inpath .. ".gz"; FNAME defaults to the base name
-      of inpath (pass opts.name = false to omit it).
-  compression.decompressFile(inpath [, outpath [, opts]]) -> true | nil, err
-      outpath defaults to inpath with ".gz" removed (".tgz" -> ".tar").
-
-  compression.compress / compression.decompress are aliases for gzip / gunzip.
 ]==]
 
 local band, bor, bxor = bit32.band, bit32.bor, bit32.bxor
@@ -431,11 +419,6 @@ local function inflate_stream(s, pos)
     -- Unused whole bytes still sitting in the bit buffer belong to whatever
     -- follows the stream; the partial last byte is padding.
     return concat(parts), pos - floor(bitcnt / 8)
-end
-
-function compression.inflate(s, pos)
-    if type(s) ~= "string" then error("inflate: expected string", 2) end
-    return protect(inflate_stream, s, pos or 1)
 end
 
 ---------------------------------------------------------------------------
@@ -926,17 +909,12 @@ local function check_level(level, fname)
     return level
 end
 
-function compression.deflate(s, level)
-    if type(s) ~= "string" then error("deflate: expected string", 2) end
-    return deflate_raw(s, check_level(level, "deflate"))
-end
-
 ---------------------------------------------------------------------------
 -- GZIP (RFC 1952)
 ---------------------------------------------------------------------------
 
 local FTEXT, FHCRC, FEXTRA, FNAME, FCOMMENT = 1, 2, 4, 8, 16
-local DEFAULT_OS = (package.config:sub(1, 1) == "\\") and 0 or 3
+local DEFAULT_OS = 3 -- Unix
 
 function compression.gzip(data, opts)
     if type(data) ~= "string" then error("gzip: expected string", 2) end
@@ -1100,58 +1078,6 @@ end
 function compression.gunzip(s, opts)
     if type(s) ~= "string" then error("gunzip: expected string", 2) end
     return protect(gunzip_impl, s, opts or {})
-end
-
-compression.compress = compression.gzip
-compression.decompress = compression.gunzip
-
----------------------------------------------------------------------------
--- File helpers
----------------------------------------------------------------------------
-
-local function read_file(path)
-    local f, err = io.open(path, "rb")
-    if not f then return nil, err end
-    local data = f:read("*a")
-    f:close()
-    return data
-end
-
-local function write_file(path, data)
-    local f, err = io.open(path, "wb")
-    if not f then return nil, err end
-    local ok, werr = f:write(data)
-    f:close()
-    if not ok then return nil, werr end
-    return true
-end
-
-function compression.compressFile(inpath, outpath, opts)
-    opts = opts or {}
-    local data, err = read_file(inpath)
-    if not data then return nil, err end
-    local o = {}
-    for k, v in pairs(opts) do o[k] = v end
-    if o.name == nil then o.name = inpath:match("([^/\\]+)$") end
-    if o.name == false then o.name = nil end
-    return write_file(outpath or (inpath .. ".gz"), compression.gzip(data, o))
-end
-
-function compression.decompressFile(inpath, outpath, opts)
-    if not outpath then
-        if inpath:match("%.[gG][zZ]$") then
-            outpath = inpath:sub(1, -4)
-        elseif inpath:match("%.[tT][gG][zZ]$") then
-            outpath = inpath:sub(1, -5) .. ".tar"
-        else
-            return nil, "unknown suffix; specify an output path"
-        end
-    end
-    local gz, err = read_file(inpath)
-    if not gz then return nil, err end
-    local data, derr = compression.gunzip(gz, opts)
-    if not data then return nil, derr end
-    return write_file(outpath, data)
 end
 
 return compression

@@ -212,7 +212,8 @@ function sim.computer(id, opts)
   }
   sim.computers[id] = c
 
-  local env = setmetatable({}, { __index = _G })
+  -- Like CC: Tweaked, where package exists only in a program's own environment, not in _G.
+  local env = setmetatable({}, { __index = function(_, k) if k ~= "package" then return _G[k] end end })
   c.env = env
   env._G = env
   env.os = setmetatable({

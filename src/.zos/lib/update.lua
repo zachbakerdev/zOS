@@ -51,7 +51,8 @@ function update.check()
         local key, value = lines[i]:match("^(%w+)=(.*)$")
         if key then info[key] = value end
     end
-    info.size = tonumber(info.size)
+    -- size and sha256 describe the legacy zos.zi, for older zOS. This reads zos.tar.gz.
+    info = { version = info.version, size = tonumber(info.tgzSize), sha256 = info.tgzSha256 }
     if not apps.validVersion(info.version) or not info.size or not crypto.isHex(info.sha256, 64) then
         return nil, "The update list is damaged."
     end
@@ -86,7 +87,7 @@ end
 -- Download, check and stage a version. Nothing in /.zos is touched: the swap happens at boot.
 -- onProgress(done, total) is called as the files are stored.
 function update.download(info, onProgress)
-    local text, err = util.get(releaseUrl(info.version, "zos.zi"), true)
+    local text, err = util.get(releaseUrl(info.version, "zos.tar.gz"), true)
     if not text then return nil, "The download failed: " .. err end
     if #text ~= info.size then return nil, "The download is the wrong size." end
     if crypto.sha256(text) ~= info.sha256 then return nil, "The download has changed." end

@@ -3,6 +3,7 @@
 package.path = "tests/?.lua;" .. package.path
 
 local sim = require("sim")
+local tgz = require("tgz")
 
 local failed, passed = 0, 0
 local function check(name, ok)
@@ -17,7 +18,7 @@ end
 local VERSION = "9.8.7"
 local RELEASES = "https://github.com/zachbakerdev/zOS/releases/"
 local MANIFEST = RELEASES .. "latest/download/zos-update.manifest"
-local IMAGE = RELEASES .. "download/v" .. VERSION .. "/zos.zi"
+local IMAGE = RELEASES .. "download/v" .. VERSION .. "/zos.tar.gz"
 local INSTALLER = RELEASES .. "download/v" .. VERSION .. "/install.lua"
 
 local function screenHas(c, text)
@@ -44,8 +45,7 @@ local function start(files, drives, change)
   local c = sim.computer(1, { files = files })
   local env = c.env
 
-  local image = env.textutils.serialize({
-    ["zi:metadata"] = { version = 1 },
+  local image = tgz({
     ["/.zos/boot.lua"] = "return 1",
     ["/startup.lua"] = "return 2",
   })
@@ -53,8 +53,8 @@ local function start(files, drives, change)
     [IMAGE] = image,
     [INSTALLER] = "print('install')",
   }
-  c.site[MANIFEST] = "zos-update 1\nversion=" .. VERSION .. "\nsize=" .. #image .. "\nsha256=" ..
-    env.require("crypto").sha256(image) .. "\nend\n"
+  c.site[MANIFEST] = "zos-update 1\nversion=" .. VERSION .. "\nsize=1\nsha256=" .. ("ab"):rep(32) ..
+    "\ntgzSize=" .. #image .. "\ntgzSha256=" .. env.require("crypto").sha256(image) .. "\nend\n"
   if change then change(c.site, drives, c) end
   c.image, c.requests = c.site[IMAGE], {}
   env.http = { get = function(url)
@@ -116,7 +116,7 @@ do
   check("reports success", screenHas(c, "zOS " .. VERSION .. " setup disk"))
   check("old files are gone", not files["disk/old.txt"] and not files["disk/folder/more.txt"])
   check("old startup is gone", not files["disk/startup"])
-  check("image is on the disk", files["disk/zos.zi"] == c.image)
+  check("image is on the disk", files["disk/zos.tar.gz"] == c.image)
   check("installer is the startup script", files["disk/startup.lua"] == c.site[INSTALLER])
   check("only those two files", #c.env.fs.list("disk") == 2)
   check("the installer comes from the same release", c.requests[3] == INSTALLER)
@@ -148,7 +148,7 @@ local function refused(name, change, message, prepare)
   char(c, "y")
   check(name .. ": says so", screenHas(c, message))
   check(name .. ": says it wasn't erased", screenHas(c, "erased"))
-  check(name .. ": disk unchanged", files["disk/old.txt"] == "old" and files["disk/zos.zi"] == nil
+  check(name .. ": disk unchanged", files["disk/old.txt"] == "old" and files["disk/zos.tar.gz"] == nil
     and files["disk/startup.lua"] == nil)
   key(c, "enter")
   check(name .. ": label unchanged", drives.left.label == "Backups")
@@ -159,7 +159,10 @@ refused("no release", function(site) site[MANIFEST] = nil end, "Not Found")
 refused("cut-off list", function(site) site[MANIFEST] = site[MANIFEST]:gsub("end\n$", "") end, "damaged")
 refused("no image", function(site) site[IMAGE] = nil end, "Not Found")
 refused("short image", function(site) site[IMAGE] = site[IMAGE]:sub(1, -2) end, "wrong size")
-refused("altered image", function(site) site[IMAGE] = site[IMAGE]:gsub("return 1", "return 3") end, "has changed")
+refused("altered image", function(site)
+  local image, i = site[IMAGE], math.floor(#site[IMAGE] / 2)
+  site[IMAGE] = image:sub(1, i - 1) .. string.char((image:byte(i) + 1) % 256) .. image:sub(i + 1)
+end, "has changed")
 refused("no installer", function(site) site[INSTALLER] = nil end, "Not Found")
 refused("broken installer", function(site) site[INSTALLER] = "this is not lua" end, "doesn't compile")
 refused("too small", nil, "A setup disk needs 1 KB", function(c) c.capacity = 900 end)
@@ -192,7 +195,7 @@ do
   check("several: asks about the chosen one", screenHas(c, "Disk: /disk2"))
   char(c, "y")
   screenHas(c, "This is now")
-  check("several: erases the chosen one", files["disk2/keep.txt"] == nil and files["disk2/zos.zi"] ~= nil)
+  check("several: erases the chosen one", files["disk2/keep.txt"] == nil and files["disk2/zos.tar.gz"] ~= nil)
   check("several: leaves the other", files["disk/old.txt"] == "old")
 end
 
@@ -268,7 +271,7 @@ do
   check("roots: signed", sim.call(c, function()
     return trust.verifyZone({ tld = "shared", root = shared.key, sig = shared.sig }, shared.key)
   end))
-  check("roots: the image is untouched", files["disk/zos.zi"] == c.image)
+  check("roots: the image is untouched", files["disk/zos.tar.gz"] == c.image)
   check("roots: three files", #c.env.fs.list("disk") == 3)
 end
 
@@ -288,7 +291,7 @@ do
   key(c, "up")
   key(c, "enter")
   screenHas(c, "This is now")
-  check("none chosen: no file", files["disk/zos.zr"] == nil and files["disk/zos.zi"] ~= nil)
+  check("none chosen: no file", files["disk/zos.zr"] == nil and files["disk/zos.tar.gz"] ~= nil)
 end
 
 -- Backing out of the list changes nothing.

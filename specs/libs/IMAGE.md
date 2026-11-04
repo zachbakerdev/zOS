@@ -1,34 +1,27 @@
 # zOS Image Library Specification
 
-`require("image")` reads and checks .zi system images. [UPDATE.md](UPDATE.md) uses it for updates. What an image contains is described in [ZI_FORMAT.md](../formats/ZI_FORMAT.md), and that format is what decides what's valid.
+`require("image")` reads and checks zos.tar.gz system images, using `lib/tar.lua` and `lib/compression.lua`. [UPDATE.md](UPDATE.md) uses it for updates. What an image contains is described in [TGZ_FORMAT.md](../formats/TGZ_FORMAT.md), and that format is what decides what's valid.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
-
-## Constants
-
-| Name                   | Value                                 |
-| ---------------------- | ------------------------------------- |
-| `image.FORMAT_VERSION` | 1, the version of the format it reads |
-| `image.METADATA`       | `"zi:metadata"`, the metadata key     |
 
 ## Methods
 
 | Method                     | Returns                                                      |
 | -------------------------- | ------------------------------------------------------------ |
-| `image.parse(text)`        | The files as (absolute path -> data), or nil and a reason    |
+| `image.parse(data)`        | The files as (absolute path -> data), or nil and a reason    |
 | `image.validPath(path)`    | Whether `path` can be a file in an image                     |
 | `image.clash(files)`       | A path used as both a file and a folder, or nil              |
 | `image.spaceNeeded(files)` | The bytes `files` take up on disk                            |
 
-### image.parse(text)
+### image.parse(data)
 
-Checks the text of an image. It rejects an image with the wrong format version, an entry that isn't two strings, a bad path, a path used as both a file and a folder, or a `.lua` file that doesn't compile. The code is compiled but not run.
+Checks the bytes of an image. It rejects anything that isn't gzipped, a damaged archive, an entry that isn't a file or folder, a bad path, a path that appears twice or is used as both a file and a folder, or a `.lua` file that doesn't compile. The code is compiled but not run. Folder entries are skipped.
 
 Nothing on the computer changes. The caller decides what to do with the files, and has to check that they make a complete system, as `update.download` does. `image.parse` accepts an image with no files.
 
 ### image.validPath(path)
 
-Applies the [path rules](../formats/ZI_FORMAT.md#paths): absolute, at most 128 bytes after the leading `/`, no segment made only of dots, and nothing inside `/rom` or a mounted disk.
+Applies the [path rules](../formats/TGZ_FORMAT.md#paths): absolute, at most 128 bytes after the leading `/`, no segment made only of dots, and nothing inside `/rom` or a mounted disk.
 
 ### image.clash(files)
 
@@ -40,4 +33,4 @@ CC: Tweaked counts each file and folder as at least 500 bytes, so this is more t
 
 ## Security
 
-An image can write anywhere outside `/rom`, so applying one means trusting it completely. `parse` catches damage and mistakes, not deliberate changes, and reading an image uses `textutils.unserialize`, which can run code. See [Security](../formats/ZI_FORMAT.md#security) in the .zi format.
+An image can write anywhere outside `/rom`, so applying one means trusting it completely. `parse` catches damage and mistakes, not deliberate changes. See [Security](../formats/TGZ_FORMAT.md#security) in the zos.tar.gz format.

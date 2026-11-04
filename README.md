@@ -21,9 +21,10 @@ wget run https://github.com/zachbakerdev/zOS/releases/latest/download/install.lu
 
 ## Building and releasing
 
-`./build.sh` builds everything a release publishes into `dist/`: the system image `zos.zi`, every
-app as `apps/<id>.za`, a minified `install.lua` and the manifests computers update from. Pass
-`--no-minify` to keep comments and indentation. `./package` builds only `zos.zi`.
+`./build.sh` builds everything a release publishes into `dist/`: the system image `zos.tar.gz`
+(and a legacy `zos.zi` for computers running zOS before 1.12.0), every app as `apps/<id>.za`, a
+minified `install.lua` and the manifests computers update from. Pass `--no-minify` to keep
+comments and indentation. `./package` builds only `zos.tar.gz`, or a `.zi` with `-o some.zi`.
 
 Minifying needs LuaSrcDiet. Install it once, from the repository root (this needs Lua 5.1 and
 its headers, e.g. Debian's `lua5.1` and `liblua5.1-0-dev`):
@@ -44,19 +45,18 @@ git push origin v1.0.0
 
 ## Installing and upgrading
 
-`install.lua` installs zOS from a `.zi` system image. Build one with `./package`, which writes
-`dist/zos.zi`. On a computer with internet access, run:
+`install.lua` installs zOS from a `zos.tar.gz` system image. Build one with `./package`, which
+writes `dist/zos.tar.gz`. On a computer with internet access, run:
 
 ```
 wget run https://raw.githubusercontent.com/zachbakerdev/zOS/main/install.lua
 ```
 
-That downloads `zos.zi` from the latest release. To use a particular image, pass its path or URL:
-`install some/file.zi` or `install https://...`.
+That downloads `zos.tar.gz` from the latest release. To use a particular image, pass its path or
+URL: `install some/file.tar.gz` or `install https://...`.
 
-To make a setup disk, copy `zos.zi` and `install.lua` to a floppy. Name the script `startup.lua`
-and a computer without zOS will run it when it boots with the disk inserted. Keep only one copy
-of the script, because two won't fit on a default floppy with the image.
+To make a setup disk, copy `zos.tar.gz` and `install.lua` to a floppy. Name the script `startup.lua`
+and a computer without zOS will run it when it boots with the disk inserted.
 
 On a computer already running zOS, the optional **Setup Disk** app does all of this from the latest
 release. It can also put root servers on the disk, as a separate file, `zos.zr`, next to the image.
@@ -572,7 +572,7 @@ Upgrades only replace `/startup.lua` and the system in `/.zos/`.
 
 ```
 install.lua               the installer
-package                   builds the system image, dist/zos.zi
+package                   builds the system image, dist/zos.tar.gz
 build.sh                  builds everything a release publishes into dist/
 tools/
   make_apps.py            packs each app in apps/ into a .za file
@@ -600,7 +600,8 @@ differ, they are the target.
 | [ZOS.md](specs/ZOS.md) | The system as a whole: layout, boot, users, updates and the security model |
 | [APP_STANDARDS.md](specs/APP_STANDARDS.md) | Where apps keep their files |
 | [ZA_FORMAT.md](specs/formats/ZA_FORMAT.md) | The .za app image format |
-| [ZI_FORMAT.md](specs/formats/ZI_FORMAT.md) | The .zi system image format |
+| [TGZ_FORMAT.md](specs/formats/TGZ_FORMAT.md) | The zos.tar.gz system image format |
+| [ZI_FORMAT.md](specs/formats/ZI_FORMAT.md) | The legacy .zi system image format |
 | [ZR_FORMAT.md](specs/formats/ZR_FORMAT.md) | The .zr file of root servers on a setup disk |
 | [APPMAN.md](specs/APPMAN.md) | The `appman` command |
 | [specs/libs/](specs/libs) | One specification per system library, listed in [ZOS.md](specs/ZOS.md) |

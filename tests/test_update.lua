@@ -3,6 +3,7 @@
 package.path = "tests/?.lua;" .. package.path
 
 local sim = require("sim")
+local tgz = require("tgz")
 
 local failed, passed = 0, 0
 local function check(name, ok)
@@ -16,7 +17,7 @@ end
 
 local CURRENT, NEXT = "2.0.0", "9.0.0"
 local MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-update.manifest"
-local IMAGE = "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/zos.zi"
+local IMAGE = "https://github.com/zachbakerdev/zOS/releases/download/v" .. NEXT .. "/zos.tar.gz"
 
 local function readFile(path)
   local f = assert(io.open(path, "rb"))
@@ -36,14 +37,19 @@ local function appText(c, id, version, minZos, extra)
   })
 end
 
--- A system image. Overrides replace entries, and false removes one.
-local function imageText(c, overrides)
+-- A system image. Overrides replace entries, and false removes one. `entries` are added as they are.
+local function imageText(c, overrides, entries)
   local image = {
-    ["zi:metadata"] = { version = 1 },
     ["/.zos/boot.lua"] = "-- new boot", ["/.zos/lib/system.lua"] = "-- new lib", ["/startup.lua"] = STARTUP,
   }
   for k, v in pairs(overrides or {}) do image[k] = v or nil end
-  return c.env.textutils.serialize(image)
+  return tgz(image, entries)
+end
+
+-- The same bytes with one changed in the middle.
+local function damage(text)
+  local i = math.floor(#text / 2)
+  return text:sub(1, i - 1) .. string.char((text:byte(i) + 1) % 256) .. text:sub(i + 1)
 end
 
 local APPS_MANIFEST = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos-apps.manifest"
@@ -86,8 +92,8 @@ local function setup(files)
   c.site = {}
   c.fetched = {}
   c.manifest = function(text, version)
-    return "zos-update 1\nversion=" .. (version or NEXT) .. "\nsize=" .. #text ..
-      "\nsha256=" .. crypto.sha256(text) .. "\nend\n"
+    return "zos-update 1\nversion=" .. (version or NEXT) .. "\nsize=1\nsha256=" .. ("ab"):rep(32) ..
+      "\ntgzSize=" .. #text .. "\ntgzSha256=" .. crypto.sha256(text) .. "\nend\n"
   end
   c.publish = function(text, version)
     c.site[MANIFEST], c.site[IMAGE] = c.manifest(text, version), text
@@ -184,8 +190,9 @@ do
 
   local info, err
   c.publish(bundle)
+  local legacy = "zos-update 1\nversion=9.0.0\nsize=" .. #bundle .. "\nsha256=" .. c.crypto.sha256(bundle) .. "\nend\n"
   for _, text in ipairs({ "", "<html>Not Found</html>", "zos-update 1\nversion=9.0.0\n", "{ version = '9.0.0' }",
-    c.site[MANIFEST]:sub(1, -5) }) do
+    c.site[MANIFEST]:sub(1, -5), legacy }) do
     c.site[MANIFEST] = text
     info = call(c, c.update.check)
     check("refuses junk as a manifest", info == nil)
@@ -194,7 +201,7 @@ do
 
   c.publish(bundle)
   info = call(c, c.update.check)
-  c.site[IMAGE] = bundle:gsub("new boot", "bad boot")
+  c.site[IMAGE] = damage(bundle)
   local ok
   ok, err = call(c, c.update.download, info)
   check("refuses a changed image", not ok and err:find("changed", 1, true))
@@ -209,12 +216,14 @@ do
     check(name, not good and why:find(wanted, 1, true))
     check(name .. " stores nothing", not c.env.fs.exists("etc/zos/update/new"))
   end
-  c.publish(c.env.textutils.serialize({ ["zi:metadata"] = { version = 2 }, ["/.zos/boot.lua"] = "", ["/startup.lua"] = "" }))
-  refused("refuses a future format", c.site[IMAGE], "newer version of zOS")
+  refused("refuses something that isn't an image", "{ ['/.zos/boot.lua'] = '' }", "isn't a .tar.gz")
+  refused("refuses a damaged image", damage(bundle), "damaged")
+  refused("refuses links", imageText(c, nil, { { name = "etc/x", type = "symlink", linkname = "/.zos" } }), "isn't a file or folder")
+  refused("refuses a file twice", imageText(c, nil, { { name = "startup.lua", data = "" } }), "twice")
   refused("refuses an image without a boot file", imageText(c, { ["/.zos/boot.lua"] = false }), "complete system")
   refused("refuses an image without a startup file", imageText(c, { ["/startup.lua"] = false }), "complete system")
   refused("refuses path escapes", imageText(c, { ["/.zos/../etc/x"] = "" }), "bad file name")
-  refused("refuses relative paths", imageText(c, { [".zos/x"] = "" }), "bad file name")
+  refused("refuses absolute names", imageText(c, nil, { { name = "/.zos/x", data = "" } }), "bad file name")
   refused("refuses a file used as a folder", imageText(c, { ["/.zos/lib"] = "" }), "both a file and a folder")
   refused("refuses code that doesn't compile", imageText(c, { ["/.zos/boot.lua"] = "if" }), "doesn't compile")
 

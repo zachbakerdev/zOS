@@ -66,11 +66,12 @@ jobs:
           wget run https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/install.lua
           \`\`\`
 
-          To make a setup disk, copy \`zos.zi\` and \`install.lua\` to a floppy.
+          To make a setup disk, copy \`zos.tar.gz\` and \`install.lua\` to a floppy.
+          \`zos.zi\` is the same system in the old format, for computers running older zOS.
 
           To install or update apps, use App Manager > Get apps from GitHub. Each app is also
           here as a \`.za\` file, for App Manager's Install from disk.
           NOTES
-          gh release create "$TAG" dist/zos.zi dist/install.lua dist/apps/*.za \
+          gh release create "$TAG" dist/zos.tar.gz dist/zos.zi dist/install.lua dist/apps/*.za \
             dist/zos-update.manifest dist/zos-apps.manifest \
             --verify-tag --title "zOS ${TAG#v}" --notes-file notes.md --generate-notes

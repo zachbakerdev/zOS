@@ -2,6 +2,9 @@
 -- Run from the repository root: lua5.2 tests/test_install.lua
 -- ZOS_INSTALLER=dist/install.lua tests a minified build of it instead.
 
+package.path = "tests/?.lua;" .. package.path
+local tgz = require("tgz")
+
 local failed, passed = 0, 0
 local function check(name, ok)
   if ok then
@@ -90,7 +93,8 @@ local function computer(files, answers)
 
   local KEYS = { up = 200, down = 208, enter = 28, numPadEnter = 156 }
   local queue, next_answer = {}, 0
-  local function pullEvent()
+  local function pullEvent(filter)
+    if filter then return filter end -- the installer yielding, after queueing this event
     if #queue == 0 then
       next_answer = next_answer + 1
       local answer = answers and answers[next_answer]
@@ -195,7 +199,7 @@ end
 
 local function quote(s) return string.format("%q", s) end
 
-local function imageText(extra)
+local function imageText(extra, entries)
   local files = {
     ["/startup.lua"] = "-- new startup",
     ["/.zos/boot.lua"] = "-- new boot",
@@ -203,14 +207,11 @@ local function imageText(extra)
     ["/.zos/apps/files/main.lua"] = "-- new files app",
   }
   for k, v in pairs(extra or {}) do files[k] = v or nil end
-  local out = { '{["zi:metadata"]={version=1},' }
-  for k, v in pairs(files) do out[#out + 1] = "[" .. quote(k) .. "]=" .. quote(v) .. "," end
-  out[#out + 1] = "}"
-  return table.concat(out)
+  return tgz(files, entries)
 end
 
 local function withImage(files, text)
-  files["zos.zi"] = text or imageText()
+  files["zos.tar.gz"] = text or imageText()
   return files
 end
 
@@ -227,7 +228,7 @@ do
   check("install: no leftovers", c.files["startup.lua.install"] == nil and not c.env.fs.exists(".zos.install"))
   check("install: disk boot off", c.settings["shell.allow_disk_startup"] == false and c.settingsSaved == "/.settings")
   check("install: reboots", c.reboots == 1)
-  check("install: the image isn't a file on the computer", c.files["zi:metadata"] == nil)
+  check("install: only the image's files", c.files["zos.tar.gz"] ~= nil and c.files["pax_global_header"] == nil)
 end
 
 do
@@ -241,7 +242,7 @@ end
 
 do
   local c = computer({}, { 1 })
-  c.urls["https://github.com/zachbakerdev/zOS/releases/latest/download/zos.zi"] = imageText()
+  c.urls["https://github.com/zachbakerdev/zOS/releases/latest/download/zos.tar.gz"] = imageText()
   c.program = "rom/programs/http/wget.lua"
   run(c)
   check("no local image: uses the release", c.files[".zos/boot.lua"] ~= nil)
@@ -249,13 +250,13 @@ end
 
 do
   local c = computer({}, { 1 })
-  c.urls["https://example.com/z.zi"] = imageText()
-  run(c, "https://example.com/z.zi")
+  c.urls["https://example.com/z.tar.gz"] = imageText()
+  run(c, "https://example.com/z.tar.gz")
   check("a URL works", c.files[".zos/boot.lua"] ~= nil)
 end
 
 do
-  local c = computer({ ["disk/zos.zi"] = imageText() }, { 1 })
+  local c = computer({ ["disk/zos.tar.gz"] = imageText() }, { 1 })
   c.program = "disk/startup.lua"
   run(c)
   check("from a disk: installs", c.files[".zos/boot.lua"] ~= nil)
@@ -263,16 +264,16 @@ do
 end
 
 do
-  local c = computer({ ["my.zi"] = imageText() }, { 1 })
-  run(c, "my.zi")
+  local c = computer({ ["my.tar.gz"] = imageText() }, { 1 })
+  run(c, "my.tar.gz")
   check("a path works", c.files[".zos/boot.lua"] ~= nil)
   check("a local image ejects nothing", #c.ejected == 0)
 end
 
 do
   local c = computer({})
-  run(c, "missing.zi")
-  check("missing image: says so", said(c, "no image at missing.zi"))
+  run(c, "missing.tar.gz")
+  check("missing image: says so", said(c, "no image at missing%.tar%.gz"))
 end
 
 do
@@ -290,9 +291,18 @@ local function refused(name, text, pattern)
   check(name .. ": nothing changed", c.files["startup.lua"] == "-- mine" and not c.env.fs.exists(".zos"))
 end
 
-refused("garbage", "this is not an image", "isn't a .zi image")
-refused("cut off", imageText():sub(1, 60), "isn't a .zi image")
-refused("wrong version", (imageText():gsub("version=1", "version=2")), "newer installer")
+refused("garbage", "this is not an image", "isn't a zos.tar.gz image")
+refused("cut off", imageText():sub(1, 60), "isn't a zos.tar.gz image")
+do
+  local text = imageText()
+  local middle = math.floor(#text / 2)
+  local flipped = text:sub(1, middle - 1) .. string.char((text:byte(middle) + 1) % 256) .. text:sub(middle + 1)
+  refused("damaged", flipped, "isn't a zos.tar.gz image")
+  refused("not gzipped", require("tar").create({ { name = "startup.lua", data = "x", mtime = 0 } }),
+    "isn't a zos.tar.gz image")
+end
+refused("symlink", imageText(nil, { { name = "etc/link", type = "symlink", linkname = "/.zos" } }), "isn't a file or folder")
+refused("twice", imageText(nil, { { name = "startup.lua", data = "-- again" } }), "twice")
 refused("no boot", imageText({ ["/.zos/boot.lua"] = false }), "complete system")
 refused("no version", imageText({ ["/.zos/lib/system.lua"] = "-- none" }), "complete system")
 refused("short version", imageText({ ["/.zos/lib/system.lua"] = 'local a={VERSION="1.0"}return a' }), "complete system")
@@ -565,7 +575,7 @@ do
 end
 
 do
-  local c = computer({ ["disk/zos.zi"] = imageText({ ["/.zos/lib/crypto.lua"] = cryptoText }),
+  local c = computer({ ["disk/zos.tar.gz"] = imageText({ ["/.zos/lib/crypto.lua"] = cryptoText }),
     ["disk/zos.zr"] = rootFile({ [tldA] = rootA }) }, { 1, 1 })
   c.program = "disk/startup.lua"
   run(c)
@@ -575,8 +585,8 @@ end
 do
   local files = withRoots({}, { [tldA] = rootA })
   local c = computer(files, { 1 })
-  c.urls["https://example.com/z.zi"] = imageText()
-  run(c, "https://example.com/z.zi")
+  c.urls["https://example.com/z.tar.gz"] = imageText()
+  run(c, "https://example.com/z.tar.gz")
   check("downloaded image: a local file isn't used", savedRoots(c)[rootA.key] == nil)
 end
 
@@ -614,7 +624,7 @@ end
 
 -- The real image, if it's been built -------------------------------------------------------------
 
-local real = readHost("dist/zos.zi")
+local real = readHost("dist/zos.tar.gz")
 if real then
   local c = computer(withImage({}, real), { 1 })
   check("real image: installs", run(c) and c.reboots == 1)

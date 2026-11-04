@@ -1,6 +1,10 @@
 -- Tests of how ./package puts the built-in apps into an image.
 -- Run from the repository root: lua5.2 tests/test_package.lua (or luajit)
 
+package.path = "tests/?.lua;src/.zos/lib/?.lua;" .. package.path
+if not bit32 then require("cc_shim") end
+local tar = require("tar")
+
 local failed, passed = 0, 0
 local function check(name, ok)
   if ok then
@@ -28,16 +32,30 @@ end
 
 local TMP = os.tmpname()
 os.remove(TMP)
-local OUT = TMP .. "/out.zi"
+local OUT = TMP .. "/out.tar.gz"
+
+-- The files in a zos.tar.gz as (absolute path -> data).
+local function unpack(text)
+  local entries = assert(tar.parse(text))
+  local files = {}
+  for _, entry in ipairs(entries) do files["/" .. entry.name] = entry.data end
+  return files
+end
 
 -- Runs ./package and returns whether it worked, what it said, and the image's files.
-local function package(options)
-  os.remove(OUT)
-  local p = io.popen("./package --no-minify -o '" .. OUT .. "' " .. options .. " 2>&1")
+local function package(options, out)
+  out = out or OUT
+  os.remove(out)
+  local p = io.popen("./package --no-minify -o '" .. out .. "' " .. options .. " 2>&1")
   local said = p:read("*a")
   p:close()
-  local text = readHost(OUT)
-  local image = text and (loadstring or load)("return " .. text)()
+  local text = readHost(out)
+  local image
+  if text and out:match("%.zi$") then
+    image = (loadstring or load)("return " .. text)()
+  elseif text then
+    image = unpack(text)
+  end
   return image ~= nil, said, image
 end
 
@@ -68,6 +86,11 @@ if ok then
   check("real: other apps stay out", image["/.zos/apps/mail/main.lua"] == nil)
 end
 check("real: no second copy in src", not readHost("src/.zos/apps/files/main.lua"))
+
+local legacy
+ok, said, legacy = package("", TMP .. "/out.zi")
+check("legacy: builds a .zi", ok and legacy["zi:metadata"].version == 1)
+check("legacy: same files", ok and image and legacy["/.zos/boot.lua"] == image["/.zos/boot.lua"])
 
 -- The rules ---------------------------------------------------------------------------------------
 

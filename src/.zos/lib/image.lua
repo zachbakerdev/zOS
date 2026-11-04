@@ -1,9 +1,8 @@
--- Reading .zi system images. See specs/formats/ZI_FORMAT.md.
+-- Reading zos.tar.gz system images. See specs/formats/TGZ_FORMAT.md.
+
+local tar = require("tar")
 
 local image = {}
-
-image.FORMAT_VERSION = 1
-image.METADATA = "zi:metadata"
 
 -- CC: Tweaked counts each file and folder as at least this many bytes.
 local MIN_FILE_SIZE = 500
@@ -31,33 +30,34 @@ function image.clash(files)
 end
 
 -- The files of an image as (path -> data), or nil and a reason.
-function image.parse(text)
-    if type(text) ~= "string" then return nil, "This isn't a .zi file." end
-    local data = textutils.unserialize(text)
-    if type(data) ~= "table" or type(data[image.METADATA]) ~= "table" then
-        return nil, "This isn't a .zi file."
+function image.parse(data)
+    if type(data) ~= "string" or data:sub(1, 2) ~= "\31\139" then
+        return nil, "This isn't a .tar.gz file."
     end
-    if data[image.METADATA].version ~= image.FORMAT_VERSION then
-        return nil, "This image needs a newer version of zOS."
-    end
+    local entries, err = tar.parse(data)
+    if not entries then return nil, "The image is damaged: " .. tostring(err) end
     local files = {}
-    for path, contents in pairs(data) do
-        if path ~= image.METADATA then
-            if type(path) ~= "string" or type(contents) ~= "string" then
-                return nil, "The image contains a bad entry."
-            end
+    for _, entry in ipairs(entries) do
+        local name = entry.name:gsub("^%./", "")
+        local kind = entry.typeflag
+        if kind ~= "0" and kind ~= "\0" and kind ~= "5" then
+            return nil, "The image contains something that isn't a file or folder: " .. entry.name
+        end
+        if entry.type ~= "directory" then
+            local path = "/" .. name
             if not image.validPath(path) then
-                return nil, "The image contains a bad file name: " .. path
+                return nil, "The image contains a bad file name: " .. entry.name
             end
-            files[path] = contents
+            if files[path] then return nil, "The image contains " .. path .. " twice." end
+            files[path] = entry.data
         end
     end
     local bad = image.clash(files)
     if bad then return nil, "The image uses " .. bad .. " as both a file and a folder." end
     for path, contents in pairs(files) do
         if path:match("%.lua$") then
-            local fn, err = load(contents, "@" .. path, "t", {})
-            if not fn then return nil, "A file in the image doesn't compile: " .. tostring(err) end
+            local fn, why = load(contents, "@" .. path, "t", {})
+            if not fn then return nil, "A file in the image doesn't compile: " .. tostring(why) end
         end
     end
     return files

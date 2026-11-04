@@ -1,8 +1,8 @@
 # Specification for the .zr File Format
 
-A .zr file holds the root servers that a setup disk offers to trust. It's kept apart from the .zi image, so that the same image can go on any disk and a list of roots can be changed without touching it.
+A .zr file holds the root servers that a setup disk offers to trust. It's kept apart from the [system image](TGZ_FORMAT.md), so that the same image can go on any disk and a list of roots can be changed without touching it.
 
-A setup disk has at most one, called `zos.zr`, in the same folder as `zos.zi`.
+A setup disk has at most one, called `zos.zr`, in the same folder as `zos.tar.gz`.
 
 The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 

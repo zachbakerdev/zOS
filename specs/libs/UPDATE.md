@@ -18,8 +18,9 @@ The library doesn't check who is calling. A caller acting for a user MUST check 
 
 | File                   | Contents                                       |
 | ---------------------- | ---------------------------------------------- |
-| `zos-update.manifest`  | The version, size and SHA-256 of `zos.zi`      |
-| `zos.zi`               | The system, in the [.zi format](../formats/ZI_FORMAT.md) |
+| `zos-update.manifest`  | The version, and the size and SHA-256 of `zos.tar.gz` and `zos.zi` |
+| `zos.tar.gz`           | The system, in the [zos.tar.gz format](../formats/TGZ_FORMAT.md) |
+| `zos.zi`               | The same system in the legacy [.zi format](../formats/ZI_FORMAT.md), for zOS before 1.12.0 |
 | `zos-apps.manifest`    | The version, size and SHA-256 of each app      |
 | `<id>.za`              | Each app, in the [.za format](../formats/ZA_FORMAT.md) |
 
@@ -28,10 +29,14 @@ Manifests are plain text, read as data. Each starts with a header line and MUST 
 ```
 zos-update 1
 version=1.0.0
-size=86412
+size=139826
 sha256=<64 hex characters>
+tgzSize=43964
+tgzSha256=<64 hex characters>
 end
 ```
+
+`size` and `sha256` describe `zos.zi`, which zOS before 1.12.0 downloads. `tgzSize` and `tgzSha256` describe `zos.tar.gz`, and zOS 1.12.0 and later MUST refuse a manifest without them. Older zOS ignores keys it doesn't know.
 
 ```
 zos-apps 1
@@ -56,8 +61,8 @@ There's one `app=` line for each app, with its fields separated by tabs. `minZos
 
 `download` works in this order, and a failure before step 5 leaves anything already staged in place:
 
-1. Downloads `zos.zi`.
-2. Checks its size and SHA-256 against `info`.
+1. Downloads `zos.tar.gz`.
+2. Checks its size and SHA-256 against `info`, which `check` takes from `tgzSize` and `tgzSha256`.
 3. Parses it with `image.parse`, and checks that it has `/.zos/boot.lua` and `/startup.lua`.
 4. Checks that it fits in the free space.
 5. Deletes anything already staged, then writes the system to `/etc/zos/update/new/` and `/startup.lua` to `/etc/zos/update/startup.new`, reading back each file. Apps in the image are skipped, because they're updated at the finish stage.

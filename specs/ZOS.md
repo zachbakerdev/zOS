@@ -8,7 +8,8 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 
 Related specifications:
 
-- [ZI_FORMAT.md](formats/ZI_FORMAT.md): the .zi system image format.
+- [TGZ_FORMAT.md](formats/TGZ_FORMAT.md): the zos.tar.gz system image format.
+- [ZI_FORMAT.md](formats/ZI_FORMAT.md): the legacy .zi system image format.
 - [ZR_FORMAT.md](formats/ZR_FORMAT.md): the .zr file of root servers on a setup disk.
 - [ZA_FORMAT.md](formats/ZA_FORMAT.md): the .za app image format.
 - [APP_STANDARDS.md](APP_STANDARDS.md): where apps keep their files.
@@ -21,7 +22,7 @@ Each system library has its own specification:
 | `apps`     | [APPS.md](libs/APPS.md)          | Installing, removing and running apps                      |
 | `auth`     | [AUTH.md](libs/AUTH.md)          | Accounts, logins and sessions                              |
 | `crypto`   | [CRYPTO.md](libs/CRYPTO.md)      | Hashing, encryption, key agreement and signatures          |
-| `image`    | [IMAGE.md](libs/IMAGE.md)        | Reading .zi system images                                  |
+| `image`    | [IMAGE.md](libs/IMAGE.md)        | Reading zos.tar.gz system images                           |
 | `keys`     | [KEYS.md](libs/KEYS.md)          | Users' key pairs and pinned keys                           |
 | `net`      | [NET.md](libs/NET.md)            | Encrypted messages between computers                       |
 | `printer`  | [PRINTER.md](libs/PRINTER.md)    | Printing text                                              |
@@ -129,7 +130,7 @@ A service is a coroutine that runs alongside the session. Services get their tur
 
 ## Installation
 
-zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it's given, or the latest release. On a setup disk it's named `startup.lua`, so that it runs by itself when a computer without zOS boots with the disk inserted. Setup MUST load and check the whole image before changing anything on the computer. It then offers the modes below as a menu that works like the desktop's, with a description of the selected mode at the bottom of the screen.
+zOS is installed by `install.lua`, from a zos.tar.gz image next to it, a path or URL it's given, or the latest release. On a setup disk it's named `startup.lua`, so that it runs by itself when a computer without zOS boots with the disk inserted. Setup MUST load and check the whole image before changing anything on the computer. It then offers the modes below as a menu that works like the desktop's, with a description of the selected mode at the bottom of the screen.
 
 | Mode            | Result                                                         |
 | --------------- | -------------------------------------------------------------- |
@@ -139,13 +140,13 @@ zOS is installed by `install.lua`, from a .zi image next to it, a path or URL it
 
 The first boot creates the administrator after an install or clean reinstall. Each thing it asks for has a label and a colon, with a `>` before the input on the next line. Install and clean reinstall turn secure boot on, and upgrades keep the setting. Setup replaces any waiting update, then ejects the disk and reboots. Ctrl+T MUST NOT be able to interrupt setup once it has started changing files.
 
-System files are distributed as a .zi image. See [ZI_FORMAT.md](formats/ZI_FORMAT.md).
+System files are distributed as a zos.tar.gz image. See [TGZ_FORMAT.md](formats/TGZ_FORMAT.md).
 
 A setup disk MAY have a .zr file next to the image, listing root servers to trust. Setup MUST check it before changing anything, and a person MUST accept each root after choosing a mode. See [ZR_FORMAT.md](formats/ZR_FORMAT.md).
 
 ## Updates
 
-zOS looks for a release 30 seconds after boot and every 6 hours after that. Each release has a .zi image of the system, a .za image of each app, and manifests giving the version, size and SHA-256 of each one. Manifests MUST end with an `end` line, so that a cut-off one isn't accepted.
+zOS looks for a release 30 seconds after boot and every 6 hours after that. Each release has a zos.tar.gz image of the system (and a legacy .zi copy for older zOS), a .za image of each app, and manifests giving the version, size and SHA-256 of each one. Manifests MUST end with an `end` line, so that a cut-off one isn't accepted.
 
 Only versions newer than the installed one are accepted. A version that failed to boot isn't downloaded again automatically, but an administrator MAY still install it from Settings.
 

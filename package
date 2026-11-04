@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Minify everything in src/ and the built-in apps, and embed them in a .zi system image.
+"""Minify everything in src/ and the built-in apps, and pack them into a zos.tar.gz system image.
 
-    ./package                   writes dist/zos.zi
-    ./package -o other.zi       or somewhere else
+    ./package                   writes dist/zos.tar.gz
+    ./package -o other.tar.gz   or somewhere else
+    ./package -o zos.zi         writes the legacy .zi image instead, for older zOS
     ./package --no-minify       keep comments and indentation, for readable error messages
     ./package --src some/dir    package another folder
     ./package --apps some/dir   take the built-in apps from another folder
@@ -10,18 +11,21 @@
 src/ mirrors the target computer, so src/.zos/boot.lua becomes /.zos/boot.lua. Apps aren't kept
 there: src/.zos/lib/builtin.lua lists the built-in apps, and each one is copied from apps/<id>/ to
 /.zos/apps/<id>/. To add one, put its id in that list. The image follows
-specs/formats/ZI_FORMAT.md, and the same input always gives the same bytes.
+specs/formats/TGZ_FORMAT.md (or ZI_FORMAT.md for a .zi), and the same input always gives the same bytes.
 
 Lua files are minified with LuaSrcDiet. See tools/minify_lua.py for how to install it.
 """
 
 import argparse
 import fnmatch
+import gzip
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -32,7 +36,8 @@ from minify_lua import minify_file  # noqa: E402
 
 DEFAULT_SRC = os.path.join(ROOT, "src")
 DEFAULT_APPS = os.path.join(ROOT, "apps")
-DEFAULT_OUT = os.path.join(ROOT, "dist", "zos.zi")
+DEFAULT_OUT = os.path.join(ROOT, "dist", "zos.tar.gz")
+LIB = os.path.join(ROOT, "src", ".zos", "lib")  # the image reader used to check the result
 
 BUILTIN_LIST = os.path.join(".zos", "lib", "builtin.lua")
 APPS_TARGET = "/.zos/apps/"
@@ -98,7 +103,7 @@ def collect_builtin_apps(src, apps_dir, files):
 
 
 def path_problem(path):
-    """Why this path breaks the rules in ZI_FORMAT.md, or None."""
+    """Why this path breaks the rules in TGZ_FORMAT.md, or None."""
     if len(path.encode()) - 1 > MAX_PATH:
         return f"is longer than {MAX_PATH} bytes"
     segments = path[1:].split("/")
@@ -133,19 +138,47 @@ def check_paths(files):
             print(f"Warning: {other} and {path} differ only by case.", file=sys.stderr)
 
 
-def build_image(files):
+def build_tgz(files):
+    """A gzipped ustar archive of the files, with names relative to / and nothing that varies."""
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        for path, data in files:
+            info = tarfile.TarInfo(path[1:])
+            info.size, info.mtime, info.mode = len(data), 0, 0o644
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            tar.addfile(info, io.BytesIO(data))
+    return gzip.compress(archive.getvalue(), compresslevel=9, mtime=0)
+
+
+def build_zi(files):
     lines = ["{", f'  ["zi:metadata"] = {{ version = {FORMAT_VERSION} }},']
     lines += [f"  [{lua_string(path.encode())}] = {lua_long_string(data)}," for path, data in files]
     lines.append("}")
-    return "\n".join(lines) + "\n"
+    return ("\n".join(lines) + "\n").encode("ascii")
 
 
 def find_lua():
     return shutil.which("lua5.2") or shutil.which("lua")
 
 
-# Loads the image as a real reader would, compiles each Lua file and writes a sorted checksum list.
-CHECK_IMAGE = r"""
+# Each loads the image as a real reader would, compiles each Lua file and lists the files by size.
+CHECK_TGZ = r"""
+package.path = arg[2] .. "/?.lua;" .. package.path
+local f = assert(io.open(arg[1], "rb"))
+local text = f:read("*a")
+f:close()
+local files = assert(require("image").parse(text))
+local names = {}
+for path, data in pairs(files) do
+  names[#names + 1] = path
+  if path:match("%.manifest$") then assert(load("return " .. data, "@" .. path, "t", {})) end
+end
+table.sort(names)
+for _, path in ipairs(names) do io.write(path, " ", #files[path], "\n") end
+"""
+
+CHECK_ZI = r"""
 local f = assert(io.open(arg[1], "rb"))
 local text = f:read("*a")
 f:close()
@@ -163,16 +196,16 @@ for _, path in ipairs(names) do io.write(path, " ", #image[path], "\n") end
 """
 
 
-def verify(image_path, files):
+def verify(image_path, files, legacy):
     """Exit unless the written image reads back as these files, in the Lua version CC uses."""
     lua = find_lua()
     if not lua:
         print("Warning: Lua isn't installed, so the image wasn't checked.", file=sys.stderr)
         return
     with tempfile.NamedTemporaryFile("w", suffix=".lua", delete=False) as script:
-        script.write(CHECK_IMAGE)
+        script.write(CHECK_ZI if legacy else CHECK_TGZ)
     try:
-        result = subprocess.run([lua, script.name, image_path], capture_output=True)
+        result = subprocess.run([lua, script.name, image_path, LIB], capture_output=True)
     finally:
         os.unlink(script.name)
     if result.returncode != 0:
@@ -192,7 +225,7 @@ def space_needed(files):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-o", "--output", default=DEFAULT_OUT, help="where to write the image (default: dist/zos.zi)")
+    parser.add_argument("-o", "--output", default=DEFAULT_OUT, help="where to write the image (default: dist/zos.tar.gz). A .zi path writes the legacy format")
     parser.add_argument("--src", default=DEFAULT_SRC, help="the folder to package (default: src/)")
     parser.add_argument("--apps", default=DEFAULT_APPS, help="the folder of app sources (default: apps/)")
     parser.add_argument("--no-minify", action="store_true", help="keep the files' comments and indentation")
@@ -210,12 +243,13 @@ def main():
     if not args.no_minify:
         files = [(path, minify_file(path, data)) for path, data in files]
 
-    text = build_image(files)
     output = os.path.abspath(args.output)
+    legacy = output.endswith(".zi")
+    text = build_zi(files) if legacy else build_tgz(files)
     os.makedirs(os.path.dirname(output), exist_ok=True)
     with open(output, "wb") as f:
-        f.write(text.encode("ascii"))
-    verify(output, files)
+        f.write(text)
+    verify(output, files, legacy)
 
     after = sum(len(data) for _, data in files)
     print(f"Wrote {os.path.relpath(output)}: {len(files)} files, {before / 1000:.0f} KB of source, "
@@ -224,7 +258,7 @@ def main():
     print(f"Needs {needed / 1000:.0f} KB of disk space when unpacked.")
     if len(text) > FLOPPY_SIZE:
         print("Note: the image is too big for a default 125 KB floppy.")
-    if len(text) > PASTEBIN_LIMIT:
+    if legacy and len(text) > PASTEBIN_LIMIT:
         print(f"Note: that's over Pastebin's {PASTEBIN_LIMIT // 1024} KB limit for free accounts.")
 
 

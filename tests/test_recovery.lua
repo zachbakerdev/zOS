@@ -2,6 +2,7 @@
 -- Run from the repository root: luajit tests/test_recovery.lua (or lua5.2)
 package.path = "tests/?.lua;" .. package.path
 if not bit32 then require("cc_shim") end
+local tgz = require("tgz")
 local unpack = table.unpack or unpack
 local ROOT = "src/.zos/"
 
@@ -231,14 +232,13 @@ local RELEASE = "https://github.com/zachbakerdev/zOS/releases/"
 local function imageText(extra)
   local files = { ["/.zos/boot.lua"] = "-- new", ["/.zos/lib/x.lua"] = "-- lib", ["/startup.lua"] = "-- startup" }
   for k, v in pairs(extra or {}) do files[k] = v end
-  files["zi:metadata"] = { version = 1 }
-  return serialize(files)
+  return tgz(files)
 end
 
 local function staged(c)
   local update, crypto = c.env.require("update"), c.env.require("crypto")
   local text = imageText()
-  c.urls[RELEASE .. "download/v9.0.0/zos.zi"] = text
+  c.urls[RELEASE .. "download/v9.0.0/zos.tar.gz"] = text
   return update, { version = "9.0.0", size = #text, sha256 = crypto.sha256(text) }
 end
 

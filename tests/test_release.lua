@@ -36,6 +36,7 @@ local function publish(name)
   site[RELEASES .. "latest/download/" .. name:match("[^/]+$")] = text
   site[RELEASES .. "download/v" .. VERSION .. "/" .. name:match("[^/]+$")] = text
 end
+publish("zos.tar.gz")
 publish("zos.zi")
 publish("zos-update.manifest")
 publish("zos-apps.manifest")

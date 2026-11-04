@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build everything a GitHub release publishes, and that computers update themselves from.
 
-    dist/zos.zi                the system image, from ./package
-    dist/zos-update.manifest   the version, size and SHA-256 of zos.zi
+    dist/zos.tar.gz            the system image, from ./package
+    dist/zos.zi                the same system in the legacy .zi format, for zOS before zos.tar.gz
+    dist/zos-update.manifest   the version, and the size and SHA-256 of zos.tar.gz and zos.zi
     dist/apps/<id>.za          every app in apps/
     dist/zos-apps.manifest     the version, size and SHA-256 of each .za
     dist/install.lua           the installer
@@ -27,9 +28,12 @@ FORMAT_VERSION = 1
 DEFAULT_OUT_DIR = os.path.join(ROOT, "dist")
 
 
-def build_manifest(version, image):
-    sha256 = hashlib.sha256(image).hexdigest()
-    return f"zos-update {FORMAT_VERSION}\nversion={version}\nsize={len(image)}\nsha256={sha256}\nend\n".encode("ascii")
+def build_manifest(version, tgz, zi):
+    """size and sha256 describe zos.zi, which older zOS reads. tgzSize and tgzSha256 describe zos.tar.gz."""
+    lines = [f"zos-update {FORMAT_VERSION}", f"version={version}",
+             f"size={len(zi)}", f"sha256={hashlib.sha256(zi).hexdigest()}",
+             f"tgzSize={len(tgz)}", f"tgzSha256={hashlib.sha256(tgz).hexdigest()}"]
+    return ("\n".join(lines) + "\nend\n").encode("ascii")
 
 
 def build_apps_manifest(version, packages):
@@ -66,10 +70,13 @@ def main():
     shutil.rmtree(apps_dir, ignore_errors=True)
     os.makedirs(apps_dir)
 
-    zi = os.path.join(args.output_dir, "zos.zi")
-    subprocess.run([os.path.join(ROOT, "package"), "-o", zi] + (["--no-minify"] if args.no_minify else []), check=True)
-    with open(zi, "rb") as f:
-        write(os.path.join(args.output_dir, "zos-update.manifest"), build_manifest(version, f.read()))
+    images = {}
+    for name in ("zos.tar.gz", "zos.zi"):
+        path = os.path.join(args.output_dir, name)
+        subprocess.run([os.path.join(ROOT, "package"), "-o", path] + (["--no-minify"] if args.no_minify else []), check=True)
+        with open(path, "rb") as f:
+            images[name] = f.read()
+    write(os.path.join(args.output_dir, "zos-update.manifest"), build_manifest(version, images["zos.tar.gz"], images["zos.zi"]))
 
     packages = []
     for app in find_apps():

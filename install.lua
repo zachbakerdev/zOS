@@ -1,19 +1,18 @@
--- Installs zOS from a .zi system image. See "Installation" in specs/ZOS.md.
+-- Installs zOS from a zos.tar.gz system image. See "Installation" in specs/ZOS.md.
 --
---     install                 uses zos.zi next to this file, or else the latest release
---     install some/file.zi    uses that image
---     install https://...     downloads that image
+--     install                     uses zos.tar.gz next to this file, or else the latest release
+--     install some/file.tar.gz    uses that image
+--     install https://...         downloads that image
 --
 -- From nothing but a network connection:
 --     wget run https://raw.githubusercontent.com/zachbakerdev/zOS/main/install.lua
 --
--- Copy this file to a floppy as install.lua or startup.lua, next to zos.zi, to make a setup disk.
+-- Copy this file to a floppy as install.lua or startup.lua, next to zos.tar.gz, to make a setup disk.
 -- As startup.lua it runs by itself when a computer without zOS boots with the disk inserted.
 -- A zos.zr next to the image offers root servers to trust. See specs/formats/ZR_FORMAT.md.
 
-local RELEASE_IMAGE = "https://github.com/zachbakerdev/zOS/releases/latest/download/zos.zi"
-local FORMAT_VERSION = 1
-local METADATA = "zi:metadata"
+local IMAGE_FILE = "zos.tar.gz"
+local RELEASE_IMAGE = "https://github.com/zachbakerdev/zOS/releases/latest/download/" .. IMAGE_FILE
 local MIN_FILE_SIZE = 500 -- CC: Tweaked counts each file and folder as at least this many bytes
 local ROOTS_FILE, ROOTS_VERSION, ROOTS_METADATA = "zos.zr", 1, "zr:metadata"
 
@@ -175,7 +174,7 @@ local function findImage()
         if not text then fail("There's no image at " .. wanted) end
         return text, path
     end
-    local path = fs.combine(source, "zos.zi")
+    local path = fs.combine(source, IMAGE_FILE)
     if fs.exists(path) and not fs.isDir(path) then return readFile(path), path end
     return download(RELEASE_IMAGE), nil
 end
@@ -198,23 +197,272 @@ local function parents(path)
     end, nil, path
 end
 
--- The files in the image as (path -> data). See "Reading an image" in specs/formats/ZI_FORMAT.md.
-local function parseImage(text)
-    local data = textutils.unserialize(text)
-    if type(data) ~= "table" or type(data[METADATA]) ~= "table" then
-        fail("This isn't a .zi image, or it's damaged.")
+-- zOS isn't on the computer yet, so this can't use lib/compression.lua or lib/tar.lua. It reads
+-- only what ./package writes: one gzip member holding a ustar archive of files and folders.
+-- See specs/formats/TGZ_FORMAT.md.
+
+local DAMAGED = "This isn't a " .. IMAGE_FILE .. " image, or it's damaged."
+local byte, char = string.byte, string.char
+
+-- CC kills a program that runs too long without yielding, so long loops call this now and then.
+local function yield()
+    os.queueEvent("zos_install_yield")
+    os.pullEvent("zos_install_yield")
+end
+
+local POW = {}
+for i = 0, 31 do POW[i] = 2 ^ i end
+
+local CRC = {}
+for i = 0, 255 do
+    local c = i
+    for _ = 1, 8 do
+        c = c % 2 == 1 and bit32.bxor(0xEDB88320, bit32.rshift(c, 1)) or bit32.rshift(c, 1)
     end
-    if data[METADATA].version ~= FORMAT_VERSION then
-        fail("This image needs a newer installer.")
+    CRC[i] = c
+end
+
+local function crc32(s)
+    local crc, bxor, band, rshift = 0xFFFFFFFF, bit32.bxor, bit32.band, bit32.rshift
+    for i = 1, #s do
+        crc = bxor(rshift(crc, 8), CRC[band(bxor(crc, byte(s, i)), 255)])
+        if i % 65536 == 0 then yield() end
     end
-    local files = {}
-    for path, contents in pairs(data) do
-        if path ~= METADATA then
-            if type(path) ~= "string" or type(contents) ~= "string" then
-                fail("The image contains a bad entry.")
+    return bxor(crc, 0xFFFFFFFF)
+end
+
+-- A canonical Huffman code from code lengths lengths[0..n-1], decoded as in zlib's puff.c.
+local function huffman(lengths, n)
+    local count, offset, symbol = {}, {}, {}
+    for len = 0, 15 do count[len] = 0 end
+    for i = 0, n - 1 do count[lengths[i]] = count[lengths[i]] + 1 end
+    local left = 1
+    for len = 1, 15 do
+        left = left * 2 - count[len]
+        if left < 0 then fail(DAMAGED) end
+    end
+    offset[1] = 0
+    for len = 1, 14 do offset[len + 1] = offset[len] + count[len] end
+    for i = 0, n - 1 do
+        local len = lengths[i]
+        if len ~= 0 then
+            symbol[offset[len]] = i
+            offset[len] = offset[len] + 1
+        end
+    end
+    return { count = count, symbol = symbol }
+end
+
+local LENGTH_BASE = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83,
+    99, 115, 131, 163, 195, 227, 258 }
+local LENGTH_EXTRA = { 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5,
+    5, 5, 0 }
+local DIST_BASE = { 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025,
+    1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 }
+local DIST_EXTRA = { 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11,
+    12, 12, 13, 13 }
+local CODE_ORDER = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 }
+
+local fixedLit, fixedDist
+do
+    local lengths = {}
+    for i = 0, 287 do lengths[i] = i < 144 and 8 or i < 256 and 9 or i < 280 and 7 or 8 end
+    fixedLit = huffman(lengths, 288)
+    for i = 0, 29 do lengths[i] = 5 end
+    fixedDist = huffman(lengths, 30)
+end
+
+-- The DEFLATE stream (RFC 1951) in s from byte pos, as a string, and the position after it.
+local function inflate(s, pos)
+    local buffer, count = 0, 0 -- bits read but not used yet, least significant first
+    local out, n = {}, 0
+
+    local function bits(want)
+        while count < want do
+            local b = byte(s, pos)
+            if not b then fail(DAMAGED) end
+            buffer = buffer + b * POW[count]
+            pos, count = pos + 1, count + 8
+        end
+        local value = buffer % POW[want]
+        buffer, count = (buffer - value) / POW[want], count - want
+        return value
+    end
+
+    local function decode(h)
+        local code, first, index = 0, 0, 0
+        for len = 1, 15 do
+            code = code + bits(1)
+            local c = h.count[len]
+            if code - c < first then return h.symbol[index + code - first] end
+            index, first, code = index + c, (first + c) * 2, code * 2
+        end
+        fail(DAMAGED)
+    end
+
+    local function codes(lit, dist)
+        local steps = 0
+        while true do
+            local sym = decode(lit)
+            if sym < 256 then
+                n = n + 1
+                out[n] = sym
+            elseif sym == 256 then
+                return
+            else
+                sym = sym - 256
+                if sym > 29 then fail(DAMAGED) end
+                local len = LENGTH_BASE[sym] + bits(LENGTH_EXTRA[sym])
+                local d = decode(dist) + 1
+                if d > 30 then fail(DAMAGED) end
+                local back = DIST_BASE[d] + bits(DIST_EXTRA[d])
+                if back > n then fail(DAMAGED) end
+                for _ = 1, len do
+                    n = n + 1
+                    out[n] = out[n - back]
+                end
             end
-            if not validPath(path) then fail("The image contains a bad file name: " .. path) end
-            files[path] = contents
+            steps = steps + 1
+            if steps % 32768 == 0 then yield() end
+        end
+    end
+
+    repeat
+        local last, kind = bits(1), bits(2)
+        if kind == 0 then
+            buffer, count = 0, 0 -- a stored block starts on a byte
+            local a, b, c, d = byte(s, pos, pos + 3)
+            if not d or a + b * 256 + c + d * 256 ~= 65535 then fail(DAMAGED) end
+            local len = a + b * 256
+            if pos + 3 + len > #s then fail(DAMAGED) end
+            for i = pos + 4, pos + 3 + len do
+                n = n + 1
+                out[n] = byte(s, i)
+            end
+            pos = pos + 4 + len
+        elseif kind == 1 then
+            codes(fixedLit, fixedDist)
+        elseif kind == 2 then
+            local nlen, ndist, ncode = bits(5) + 257, bits(5) + 1, bits(4) + 4
+            if nlen > 286 or ndist > 30 then fail(DAMAGED) end
+            local lengths = {}
+            for i = 0, 18 do lengths[i] = 0 end
+            for i = 1, ncode do lengths[CODE_ORDER[i]] = bits(3) end
+            local lencode = huffman(lengths, 19)
+            lengths = {}
+            local i = 0
+            while i < nlen + ndist do
+                local sym = decode(lencode)
+                if sym < 16 then
+                    lengths[i], i = sym, i + 1
+                else
+                    local value, times = 0, 0
+                    if sym == 16 then
+                        if i == 0 then fail(DAMAGED) end
+                        value, times = lengths[i - 1], 3 + bits(2)
+                    elseif sym == 17 then
+                        times = 3 + bits(3)
+                    else
+                        times = 11 + bits(7)
+                    end
+                    if i + times > nlen + ndist then fail(DAMAGED) end
+                    for _ = 1, times do lengths[i], i = value, i + 1 end
+                end
+            end
+            if lengths[256] == 0 then fail(DAMAGED) end
+            local distLengths = {}
+            for j = 0, ndist - 1 do distLengths[j] = lengths[nlen + j] end
+            codes(huffman(lengths, nlen), huffman(distLengths, ndist))
+        else
+            fail(DAMAGED)
+        end
+    until last == 1
+
+    local parts = {}
+    for i = 1, n, 4096 do parts[#parts + 1] = char(table.unpack(out, i, math.min(i + 4095, n))) end
+    return table.concat(parts), pos
+end
+
+local function u32(s, pos)
+    local a, b, c, d = byte(s, pos, pos + 3)
+    if not d then fail(DAMAGED) end
+    return a + b * 256 + c * 65536 + d * 16777216
+end
+
+-- The data in a gzip file (RFC 1952) with one member.
+local function gunzip(s)
+    local id1, id2, method, flags = byte(s, 1, 4)
+    if id1 ~= 31 or id2 ~= 139 or method ~= 8 or not flags or flags >= 32 then fail(DAMAGED) end
+    local pos = 11
+    local function flag(value) return math.floor(flags / value) % 2 == 1 end
+    if flag(4) then
+        local a, b = byte(s, pos, pos + 1)
+        if not b then fail(DAMAGED) end
+        pos = pos + 2 + a + b * 256
+    end
+    for _, value in ipairs({ 8, 16 }) do -- the file name and comment
+        if flag(value) then
+            pos = s:find("\0", pos, true)
+            if not pos then fail(DAMAGED) end
+            pos = pos + 1
+        end
+    end
+    if flag(2) then pos = pos + 2 end
+    local data
+    data, pos = inflate(s, pos)
+    if pos + 7 ~= #s or u32(s, pos) ~= crc32(data) or u32(s, pos + 4) ~= #data % 2 ^ 32 then
+        fail(DAMAGED)
+    end
+    return data
+end
+
+local function field(h, from, len)
+    return (h:sub(from, from + len - 1):match("^[^\0]*"))
+end
+
+local function octal(h, from, len)
+    local digits = h:sub(from, from + len - 1):gsub("\0", " "):match("^ *([0-7]+) *$")
+    if not digits then fail(DAMAGED) end
+    return tonumber(digits, 8)
+end
+
+-- The entries of a ustar archive as { name, folder, data }.
+local function untar(s)
+    local entries, pos = {}, 1
+    while true do
+        local h = s:sub(pos, pos + 511)
+        if #h < 512 then fail(DAMAGED) end
+        if not h:find("[^\0]") then return entries end
+        local sum = 256 -- the checksum field counts as eight spaces
+        for i = 1, 512 do
+            if i < 149 or i > 156 then sum = sum + byte(h, i) end
+        end
+        if octal(h, 149, 8) ~= sum then fail(DAMAGED) end
+        local name = field(h, 1, 100)
+        if h:sub(258, 262) == "ustar" and field(h, 346, 155) ~= "" then
+            name = field(h, 346, 155) .. "/" .. name
+        end
+        local kind, size = h:sub(157, 157), octal(h, 125, 12)
+        if kind ~= "0" and kind ~= "\0" and kind ~= "5" then
+            fail("The image contains something that isn't a file or folder: " .. name)
+        end
+        local data = s:sub(pos + 512, pos + 511 + size)
+        if #data < size then fail(DAMAGED) end
+        entries[#entries + 1] = { name = name, folder = kind == "5" or name:sub(-1) == "/", data = data }
+        pos = pos + 512 + math.ceil(size / 512) * 512
+    end
+end
+
+-- The files in the image as (path -> data). See "Reading an image" in specs/formats/TGZ_FORMAT.md.
+local function parseImage(text)
+    local files = {}
+    for _, entry in ipairs(untar(gunzip(text))) do
+        local name = entry.name:gsub("^%./", "")
+        if not entry.folder then
+            local path = "/" .. name
+            if not validPath(path) then fail("The image contains a bad file name: " .. entry.name) end
+            if files[path] then fail("The image contains " .. path .. " twice.") end
+            files[path] = entry.data
         end
     end
     for path, contents in pairs(files) do

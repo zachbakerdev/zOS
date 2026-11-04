@@ -1,5 +1,7 @@
 # Specification for the .zi File Format
 
+> **Legacy.** System images are now [zos.tar.gz](TGZ_FORMAT.md) files. Releases still include a `zos.zi` so that computers running older zOS can update, and the [.za app format](ZA_FORMAT.md) follows the conventions described here.
+
 The .zi file format is used as a disk image for copying all files over for an operating system.
 
 A .zi file holds every file of one computer's system in a single text file, so that the whole set can be moved by floppy, Pastebin or HTTP and then written back out in one step.

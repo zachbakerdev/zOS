@@ -14,6 +14,7 @@ local update = require("update")
 local util = require("util")
 
 local TITLE = "Setup Disk"
+local IMAGE = "zos.tar.gz"
 local MIN_FILE_SIZE = 500 -- CC: Tweaked counts each file as at least this many bytes
 local ROOT_SERVER_CONFIG = "/etc/root-server/config" -- documented in specs/formats/ZR_FORMAT.md
 
@@ -172,7 +173,8 @@ local function latestRelease()
         local key, value = line:match("^(%w+)=(.*)$")
         if key then info[key] = value end
     end
-    info.size = tonumber(info.size)
+    -- size and sha256 describe the legacy zos.zi, for older zOS. Disks get zos.tar.gz.
+    info.size, info.sha256 = tonumber(info.tgzSize), info.tgzSha256
     if lines[1] ~= "zos-update 1" or lines[#lines] ~= "end" or not apps.validVersion(info.version)
         or not info.size or not crypto.isHex(info.sha256, 64) then
         return nil, "The release list is damaged."
@@ -189,14 +191,14 @@ local function download(progress)
     local base = update.RELEASES .. "download/v" .. info.version .. "/"
 
     progress(1, 4, "Downloading zOS " .. info.version)
-    local zi
-    zi, err = util.get(base .. "zos.zi", true)
-    if not zi then return nil, err end
+    local tgz
+    tgz, err = util.get(base .. IMAGE, true)
+    if not tgz then return nil, err end
     progress(2, 4, "Checking zOS " .. info.version)
-    if #zi ~= info.size then return nil, "The download is the wrong size." end
-    if crypto.sha256(zi) ~= info.sha256 then return nil, "The download has changed." end
+    if #tgz ~= info.size then return nil, "The download is the wrong size." end
+    if crypto.sha256(tgz) ~= info.sha256 then return nil, "The download has changed." end
     local files
-    files, err = image.parse(zi)
+    files, err = image.parse(tgz)
     if not files then return nil, err end
     if not files["/.zos/boot.lua"] or not files["/startup.lua"] then
         return nil, "The image isn't a complete system."
@@ -210,12 +212,12 @@ local function download(progress)
     fn, err = load(installer, "@install.lua", "t", {})
     if not fn then return nil, "The installer doesn't compile: " .. tostring(err) end
 
-    return { version = info.version, zi = zi, installer = installer }
+    return { version = info.version, image = tgz, installer = installer }
 end
 
 local function fits(d, release)
     local capacity = fs.getCapacity(d.mount)
-    local needed = math.max(#release.zi, MIN_FILE_SIZE) + math.max(#release.installer, MIN_FILE_SIZE)
+    local needed = math.max(#release.image, MIN_FILE_SIZE) + math.max(#release.installer, MIN_FILE_SIZE)
     if release.roots then needed = needed + math.max(#release.roots, MIN_FILE_SIZE) end
     if type(capacity) == "number" and capacity < needed then
         return nil, ("A setup disk needs %d KB, but this disk only holds %d KB."):format(
@@ -231,7 +233,7 @@ local function write(d, release, progress)
     for _, name in ipairs(fs.list(d.mount)) do
         fs.delete(fs.combine(d.mount, name))
     end
-    local files = { { "zos.zi", release.zi } }
+    local files = { { IMAGE, release.image } }
     if release.roots then files[#files + 1] = { "zos.zr", release.roots } end
     files[#files + 1] = { "startup.lua", release.installer }
     for i, file in ipairs(files) do

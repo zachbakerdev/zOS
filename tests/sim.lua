@@ -210,6 +210,7 @@ function sim.computer(id, opts)
   local c = {
     id = id, files = opts.files or {}, events = {}, timers = {}, timerId = 0, threads = {},
     modems = opts.modems or { top = { open = {} } }, printers = {}, label = opts.label, width = opts.width,
+    pos = opts.pos,
   }
   sim.computers[id] = c
 
@@ -254,6 +255,7 @@ function sim.computer(id, opts)
       if method == "open" then modem.open[a] = true
       elseif method == "close" then modem.open[a] = nil
       elseif method == "transmit" then sim.transmit(c, name, a, b, copy(message))
+      elseif method == "isWireless" then return not modem.wired
       end
     end,
   }
@@ -332,12 +334,22 @@ function sim.transmit(from, side, channel, reply, message)
   sim.deliver(packet)
 end
 
+-- How far apart two computers are: from their `pos` if both have one, otherwise 5. A packet can
+-- also carry its own `pos`, to send it from somewhere else.
+local function distance(packet, c)
+  local from = packet.pos or (sim.computers[packet.from] and sim.computers[packet.from].pos)
+  if not from or not c.pos then return 5 end
+  local dx, dy, dz = from[1] - c.pos[1], from[2] - c.pos[2], from[3] - c.pos[3]
+  return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
 function sim.deliver(packet, excludeId)
   for _, c in pairs(sim.computers) do
     if c.id ~= packet.from and c.id ~= excludeId and not c.off then
       for name, modem in pairs(c.modems) do
         if modem.open[packet.channel] then
-          queue(c, "modem_message", name, packet.channel, packet.reply, copy(packet.message), 5)
+          local d = not modem.wired and distance(packet, c) or nil
+          queue(c, "modem_message", name, packet.channel, packet.reply, copy(packet.message), d)
         end
       end
     end

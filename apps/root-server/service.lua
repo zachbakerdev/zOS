@@ -31,6 +31,8 @@ local function requests()
                 net.reply(msg, db.config().zone)
             elseif payload.op == "resolve" then
                 net.reply(msg, db.resolve(payload.name))
+            elseif payload.op == "gps" then
+                net.reply(msg, db.handleGps(payload, msg.peer.key, msg.from, msg.peer.name))
             end
         end
     end

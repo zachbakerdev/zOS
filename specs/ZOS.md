@@ -23,6 +23,7 @@ Each system library has its own specification:
 | `apps`     | [APPS.md](libs/APPS.md)          | Installing, removing and running apps                      |
 | `auth`     | [AUTH.md](libs/AUTH.md)          | Accounts, logins and sessions                              |
 | `crypto`   | [CRYPTO.md](libs/CRYPTO.md)      | Hashing, encryption, key agreement and signatures          |
+| `gps`      | [GPS.md](libs/GPS.md)            | Where this computer is, from GPS hosts a root vouches for  |
 | `image`    | [IMAGE.md](libs/IMAGE.md)        | Reading zos.tar.gz system images                           |
 | `keys`     | [KEYS.md](libs/KEYS.md)          | Users' key pairs and pinned keys                           |
 | `net`      | [NET.md](libs/NET.md)            | Encrypted messages between computers                       |
@@ -42,7 +43,7 @@ Each system library has its own specification:
 | `/.zos/boot.lua`               | The boot sequence                                       |
 | `/.zos/lib/`                   | System libraries                                        |
 | `/.zos/sys/`                   | System screens: setup, login, desktop, settings and recovery |
-| `/.zos/bin/`                   | Shell programs: `appman`, `tar`, `gzip` and `gunzip`    |
+| `/.zos/bin/`                   | Shell programs: `appman`, `tar`, `gzip`, `gunzip` and `locate` |
 | `/.zos/apps/<id>/`             | Installed apps                                          |
 | `/etc/zos/`                    | System data                                             |
 | `/etc/<id>/`                   | Each app's global data                                  |
@@ -123,7 +124,7 @@ An app contains:
 
 `require` finds the app's own modules first, then the system libraries. Apps are listed and started in order of name, ignoring case. The desktop's first item is Apps, a menu of the apps that aren't built in, which says so if there are none. The built-in apps follow it on the desktop itself. Apps with `admin` set are hidden from users who aren't administrators and refuse to open for them. Their services still run.
 
-App Manager, Terminal and Files are built-in apps. App Manager, Terminal, Setup Disk, Mail Server and Root Server are admin only. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
+App Manager, Terminal and Files are built-in apps. App Manager, Terminal, Setup Disk, Mail Server, Root Server and GPS Server are admin only. They can be upgraded but not removed. `/.zos/lib/builtin.lua` is the only list of them, and `./package` copies each one from `apps/<id>/` into the system image.
 
 ### Services
 

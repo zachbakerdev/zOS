@@ -31,6 +31,10 @@ A lookup finds the trusted root that owns the domain and asks it for the certifi
 
 A computer trusts one root for each domain. `net.addRoot` and the installer refuse a second, and a setup disk can only hold one. If two trusted roots still claim one domain, as they can on a computer that trusted them before this rule or when a root moves to another domain, lookups in it are refused.
 
+### GPS certificates
+
+A GPS certificate says that a GPS host, on a computer id, is at a position, and which key signs its answers. It's separate from a name certificate, so a computer can hold both, and the root server's admin approves it under **GPS hosts** in the Root Server app. It lasts and renews like a name certificate, but a new position needs approving again. [GPS.md](GPS.md) describes how clients use it.
+
 ## Permissions
 
 Apps MAY read `trust.defaultName()`, `trust.roots()`, `trust.root(key)`, `trust.certs()` and `trust.cert(rootKey)`, and use the name checks. Apps MUST NOT change the trusted roots or use `trust.identity()`, which returns the computer's secret seed. The exception is an app that is a root server, which uses the signing methods with its own key.
@@ -49,6 +53,13 @@ Keys in tables are hex strings of 64 characters, and signatures are hex strings 
 | `expires`         | When it expires, in the same form                |
 | `sig`             | The root's signature                             |
 
+| GPS certificate field | Contents                                     |
+| --------------------- | -------------------------------------------- |
+| `id`                  | The computer id of the host                  |
+| `key`                 | The key the host signs its answers with      |
+| `x`, `y`, `z`         | Where the host is, in whole blocks           |
+| `root`, `issued`, `expires`, `sig` | As for a certificate            |
+
 | Root field | Contents                                                     |
 | ---------- | ------------------------------------------------------------ |
 | `key`      | The root's public key                                        |
@@ -63,6 +74,7 @@ Each signed text starts with a label, so that a signature for one purpose can't 
 | Certificate | As above       | `zos-cert-1`, `name`, `id`, `key`, `root`, `issued`, `expires` |
 | Advert      | `name`, `key`, `sig` | `zos-advert-1`, `name`, `key`                      |
 | Zone        | `tld`, `root`, `sig` | `zos-zone-1`, `tld`, `root`                        |
+| GPS certificate | As above   | `zos-gps-1`, `id`, `key`, `x`, `y`, `z`, `root`, `issued`, `expires` |
 
 ## Identity
 
@@ -79,6 +91,7 @@ Each signed text starts with a label, so that a signature for one purpose can't 
 | `trust.parseHost(host)` | The label and top-level domain of a hostname, or nil and a reason |
 | `trust.validTld(tld)`  | True, or false and a reason                                     |
 | `trust.tldFromName(name)` | A top-level domain to suggest for a root server called `name` |
+| `trust.validPosition(x, y, z)` | Whether these are whole numbers within 30,000,000 blocks of the centre |
 
 A name is up to 32 letters, digits, spaces, `-` or `_`. A name with a dot MUST be a valid hostname. A top-level domain is up to 16 lowercase letters, digits or `-`, starting with a letter or digit.
 
@@ -112,9 +125,10 @@ A person MUST compare a root's fingerprint before it's added, and a caller actin
 | `trust.certIntact(cert)`           | Whether it's well formed, current and signed by the root it names |
 | `trust.verifyAdvert(advert)`       | Whether it's signed by the key it shows                     |
 | `trust.verifyZone(zone, rootKey)`  | Whether it's signed by this root                            |
+| `trust.gpsCertIntact(cert)`        | Whether a GPS certificate is well formed, current and signed by the root it names |
 | `trust.namesFor(certs, id, keyHex)` | What a peer's certificates prove: a table of (root key -> name), and the first certificate that counts, or nil |
 
-None of the first three ask whether the root is trusted, and only `namesFor` does. A certificate counts only for its own computer id and key, and only if a trusted root signed it. Otherwise any certified computer could claim another's id and replace its pinned key.
+None of the first four ask whether the root is trusted, and only `namesFor` does. A certificate counts only for its own computer id and key, and only if a trusted root signed it. Otherwise any certified computer could claim another's id and replace its pinned key.
 
 Signature checks are slow and a peer chooses what it sends, so `namesFor` looks at no more than 32 certificates and checks the signatures of no more than 4. The results of the last 64 checks are remembered.
 
@@ -127,6 +141,7 @@ These are for root servers, which pass in their own seed and public key as raw b
 | `trust.issue(rootSeed, rootPublic, name, id, key, lifetime)` | A certificate. `lifetime` is in milliseconds |
 | `trust.signAdvert(rootSeed, rootPublic, name)`             | An advert                |
 | `trust.signZone(rootSeed, rootPublic, tld)`                | A zone                   |
+| `trust.issueGps(rootSeed, rootPublic, id, key, x, y, z, lifetime)` | A GPS certificate. `lifetime` is in milliseconds |
 
 A root server MUST only sign hostnames in its own top-level domain.
 
@@ -145,4 +160,4 @@ Everything is in `/etc/zos/net/`.
 - **First contact.** A pinned peer can be impersonated the first time it's seen.
 - **Revocation.** A certificate can't be cancelled before it expires, so keep lifetimes short if that matters.
 - **Stored identity.** The identity seed isn't encrypted, so any app on a computer can impersonate that computer. Files aren't private, and networking has to run while nobody is logged in.
-- **Root servers.** A trusted root can certify any name in its domain and any computer id, so an admin SHOULD only trust roots they'd trust with that power. Root servers MUST NOT be open for anyone to log in to.
+- **Root servers.** A trusted root can certify any name in its domain, any computer id and any GPS position, so an admin SHOULD only trust roots they'd trust with that power. Root servers MUST NOT be open for anyone to log in to.

@@ -107,7 +107,7 @@ for _, entry in ipairs(list or {}) do
 end
 
 -- Apps that need wireless modems or a fixed place aren't offered to pocket computers or turtles.
-local computerOnly = { storage = true, ["root-server"] = true, ["mail-server"] = true }
+local computerOnly = { storage = true, ["root-server"] = true, ["mail-server"] = true, ["gps-server"] = true }
 for _, device in ipairs({ "pocket", "turtle" }) do
   c.env[device] = {}
   list = call(update.checkApps)

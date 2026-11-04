@@ -133,6 +133,84 @@ local function requests()
     end
 end
 
+-- GPS hosts ------------------------------------------------------------------------------------
+
+local function where(entry)
+    return entry.x .. ", " .. entry.y .. ", " .. entry.z
+end
+
+local function computerOf(entry)
+    return "Computer " .. tostring(entry.from) .. (entry.name and (" (" .. entry.name .. ")") or "")
+end
+
+local function reviewGps(entry)
+    ui.screen(TITLE .. " - GPS host")
+    ui.text(computerOf(entry) .. " wants to be a GPS host at " .. where(entry) .. ".")
+    ui.text("")
+    ui.text("Fingerprint:", ui.theme.dim)
+    ui.text(crypto.fingerprint(crypto.fromHex(entry.key)), ui.theme.accent)
+    ui.text("")
+    ui.text("Every computer that trusts this server will work out where it is from this host. " ..
+        "Approve it only if GPS Server on that computer shows the same fingerprint, and its " ..
+        "computer really is at " .. where(entry) .. ".", ui.theme.dim)
+    ui.text("")
+    if ui.confirm("Sign this position?") then
+        ui.text("Signing...", ui.theme.dim)
+        local ok, err = db.approveGps(entry.key, entry.gpsKey, entry.x, entry.y, entry.z, entry.from)
+        if ok then system.log(session.user .. " signed GPS host " .. tostring(entry.from) .. " at " .. where(entry)) end
+        return done("Signed. It will pick up its certificate by itself.", ok, err)
+    end
+    ui.text("")
+    if ui.confirm("Refuse it?") then
+        db.setGpsStatus(entry.key, "denied")
+        system.log(session.user .. " refused GPS host " .. tostring(entry.from) .. " at " .. where(entry))
+    end
+end
+
+local function manageGps(entry)
+    if entry.status == "pending" then return reviewGps(entry) end
+    local issued = entry.status == "issued"
+    local text = computerOf(entry) .. "\nPosition: " .. where(entry) .. "\n\nFingerprint:\n" ..
+        crypto.fingerprint(crypto.fromHex(entry.key)) .. "\n\nStatus: " .. entry.status ..
+        (issued and "" or "\n\nForgetting this lets the computer ask again.")
+    local action = ui.pager(TITLE .. " - GPS host", text, issued and "R: revoke  Q: back" or "F: forget  Q: back",
+        issued and { r = "revoke" } or { f = "forget" })
+    ui.screen(TITLE)
+    if action == "revoke" then
+        ui.text("Revoke this GPS host? It can't renew, and has to be forgotten here before it can ask " ..
+            "again. Its current certificate works until it expires, in up to " .. db.config().days ..
+            " days, because computers don't check back with this server.", ui.theme.accent)
+        ui.text("")
+        if ui.confirm("Revoke it?") then
+            db.setGpsStatus(entry.key, "revoked")
+            system.log(session.user .. " revoked GPS host " .. tostring(entry.from) .. " at " .. where(entry))
+        end
+    elseif action == "forget" then
+        db.forgetGps(entry.key)
+    end
+end
+
+local function gpsHosts()
+    local selected = 1
+    while true do
+        local list = db.gpsList()
+        local items = {}
+        for _, entry in ipairs(list) do
+            items[#items + 1] = {
+                label = "#" .. tostring(entry.from) .. " " .. where(entry) .. "  [" .. entry.status .. "]",
+                hint = crypto.fingerprint(crypto.fromHex(entry.key)),
+                fg = entry.status == "pending" and ui.theme.accent or
+                    (entry.status == "issued" and ui.theme.fg or ui.theme.dim),
+            }
+        end
+        if #list == 0 then items[1] = { label = "(no GPS hosts yet)", fg = ui.theme.dim } end
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+        selected = ui.menu({ title = TITLE .. " - GPS hosts", items = items, selected = selected, back = true })
+        if selected == nil or not list[selected] then return end
+        manageGps(list[selected])
+    end
+end
+
 -- Everything someone needs to check they've found this server. Only the public half of the key.
 local function identityText()
     local _, public = db.keypair()
@@ -205,9 +283,15 @@ while true do
     for _, entry in ipairs(db.list()) do
         if entry.status == "pending" then pending = pending + 1 end
     end
+    local gpsPending = 0
+    for _, entry in ipairs(db.gpsList()) do
+        if entry.status == "pending" then gpsPending = gpsPending + 1 end
+    end
     local items = {
         { label = "Requests" .. (pending > 0 and (" (" .. pending .. " waiting)") or ""), action = requests,
           hint = "Approve computers and manage certificates", fg = pending > 0 and ui.theme.accent or nil },
+        { label = "GPS hosts" .. (gpsPending > 0 and (" (" .. gpsPending .. " waiting)") or ""), action = gpsHosts,
+          hint = "Approve where GPS hosts are", fg = gpsPending > 0 and ui.theme.accent or nil },
         { label = "This server", action = serverInfo, hint = "Name and fingerprint" },
         { label = "Print server identity", action = printIdentity, hint = "For others to verify this server against" },
         { label = "Name: " .. config.name, action = rename, hint = "What computers see when they look for roots" },

@@ -22,7 +22,7 @@ A port is a modem channel, from 0 to 65533. 65534 and 65535 are used by rednet.
 
 Each computer also keeps a home channel open, `30000 + id % 30000`, for handshake replies, acks and replies to requests. It can't be listened on, and only accepts answers to a request the computer is waiting on.
 
-Root servers use port 4200, which is `net.ROOT_PORT`.
+Root servers use port 4200, which is `net.ROOT_PORT`. GPS uses 4203 directly, outside `net`, as described in [GPS.md](GPS.md#protocol).
 
 Apps SHOULD pick a fixed port of their own that doesn't clash with that, and SHOULD avoid the home channel range.
 
@@ -334,6 +334,7 @@ Root servers answer `net.request` messages on port 4200. Each is a table with an
 | `certificate` | `name` | `{ status, cert, message }`. `status` is `issued`, `pending` or `denied`. Any other answer is a refusal, explained by `message` |
 | `zone`        | None   | The root's zone record, as in [TRUST.md](TRUST.md#data-formats) |
 | `resolve`     | `name` | `{ cert }`, or nothing in `cert` if there's no such host    |
+| `gps`         | `key`, `x`, `y`, `z` | As for `certificate`, with a GPS certificate for the GPS key `key` at that position. A new position or key waits for approval again |
 
 They also answer probes on that port with a signed advert.
 

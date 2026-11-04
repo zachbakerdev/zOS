@@ -123,7 +123,7 @@ The folders are in `/etc/zos/update/`. Downloaded and finished updates are logge
 | app             | what it does |
 |-----------------|--------------|
 | **Files**       | Browse folders; create, edit, copy, move and delete files and folders. Users who aren't admins stay in their home folder. To run a program, use the Terminal |
-| **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session. Adds `tar`, `gzip` and `gunzip` ([ARCHIVES.md](specs/ARCHIVES.md)) |
+| **Terminal**    | Admin only. The CraftOS shell (`exit` returns to the desktop, and Ctrl+T stops the running program). No `bg` or `fg`, since a tab would outlive the session. Adds `tar`, `gzip` and `gunzip` ([ARCHIVES.md](specs/ARCHIVES.md)), and `locate` ([GPS](#gps)) |
 | **App Manager** | Admin only. Install and remove apps |
 
 These can be upgraded but not removed, and they're listed on the desktop under **Apps**, which
@@ -160,6 +160,7 @@ folder under `apps/`.
 | [`apps/mail`](apps/mail)         | **Mail**       | Read and send mail through a mail server, see [Mail](#mail) |
 | [`apps/mail-server`](apps/mail-server) | **Mail Server** | Hosts mailboxes under a hostname from a root server, see [Mail](#mail) |
 | [`apps/root-server`](apps/root-server) | **Root Server** | Signs other computers' keys, see [Root servers](#root-servers) |
+| [`apps/gps-server`](apps/gps-server) | **GPS Server** | Tells nearby computers where they are, vouched for by a root server, see [GPS](#gps) |
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 | [`apps/storage`](apps/storage) | **Storage** | Searches chests on a wired network and moves items in and out through one chest, see [Storage](#storage) |
 | [`apps/minesweeper`](apps/minesweeper) | **Minesweeper** | The classic game, see [Minesweeper](#minesweeper) |
@@ -205,7 +206,7 @@ An app is a folder with a manifest and a main program, installed to `/.zos/apps/
 }
 ```
 
-Storage, Root Server and Mail Server are made for computers only. Pocket computers and turtles can't
+Storage, Root Server, Mail Server and GPS Server are made for computers only. Pocket computers and turtles can't
 use wired modems, and servers need to stay in one place.
 
 The desktop's **Apps** menu lists every installed app the user can open, by name, and the built-in
@@ -516,6 +517,38 @@ can change what it shares and who it trusts. Whoever verifies a computer can dow
 that's shared, since there are no per-file permissions. The file is held in memory at both ends
 during a download.
 
+### GPS
+
+GPS works like CraftOS's `gps`, except that every answer has to be vouched for by a root server
+you trust. A computer can't be told it's somewhere else by anyone who puts up a host of their own.
+
+```lua
+local x, y, z = require("gps").locate()   -- nil if it can't tell
+```
+
+`locate` in the Terminal prints the same. Every zOS computer has the library, and needs a wireless
+or ender modem to use it.
+
+1. **Set up hosts.** On each host, which needs a wireless or ender modem, trust a root server in
+   **Settings → Security → Root servers**. Then install GPS Server, open it, and enter the
+   computer's own coordinates (look at it and press F3).
+2. **Approve them.** The root server's admin compares the fingerprint GPS Server shows and approves
+   the position under **GPS hosts** in the Root Server app. The host picks up its certificate by
+   itself and starts answering on port 4203. Changing the position needs approving again.
+3. **Locate.** Any computer that trusts the same root server can now find where it is.
+
+Use at least 4 hosts that aren't all at the same height, spread out, and 5 or more so that one wrong
+host is outvoted. A host that has been moved keeps giving its old position until its root server's
+admin revokes it. With too few others to outvote it, `locate` returns nil rather than a wrong answer.
+
+- **What the root server signs.** A GPS certificate holds the host's position and the key it signs
+  its answers with. Each answer carries the certificate and a timestamp signed with that key every
+  5 minutes, so an answer copied from a host stops working after 10 minutes.
+- **What it can't stop.** A computer works out its distance from whoever sent each answer, so
+  someone who passes a host's answers on from somewhere else can still mislead a computer that's
+  out of range of the real host. A host heard from two places is ignored. Anyone can also jam the
+  channel. See [GPS.md](specs/libs/GPS.md).
+
 ### Protocol
 
 Each handshake uses new X25519 keys, and each side signs both of them with its Ed25519 identity
@@ -585,7 +618,7 @@ src/                      mirrors the target computer
   startup.lua             -> /startup.lua
   .zos/                   -> /.zos
     boot.lua              boot stages and the session loop
-    bin/                  shell programs: appman, tar, gzip and gunzip
+    bin/                  shell programs: appman, tar, gzip, gunzip and locate
     lib/                  system libraries
     sys/                  login, desktop, settings, setup and recovery screens
 ```

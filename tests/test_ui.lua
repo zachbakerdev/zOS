@@ -219,7 +219,7 @@ local function scenario(width)
   -- printing the root server's identity
   key(root, "backspace")
   check("back to the root's menu", screenHas(root, "Print server identity"))
-  pick(root, 2)
+  pick(root, 3) -- Requests, GPS hosts, This server, Print server identity
   check("root without a printer says so", screenHas(root, "Attach one"))
   key(root, "enter")
   screenHas(root, "Print server identity")

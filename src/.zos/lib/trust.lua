@@ -149,6 +149,41 @@ function trust.certIntact(cert)
         and cert.expires > os.epoch("utc") and checkSignature(cert.root, certText(cert), cert.sig)
 end
 
+-- GPS certificates ----------------------------------------------------------------------------
+
+local MAX_COORD = 30000000 -- the edge of a Minecraft world
+
+local function gpsText(c)
+    return table.concat({ "zos-gps-1", c.id, c.key, c.x, c.y, c.z, c.root, c.issued, c.expires }, "|")
+end
+
+-- Whether x, y and z are whole numbers inside the world.
+function trust.validPosition(x, y, z)
+    for _, n in ipairs({ x, y, z }) do
+        if type(n) ~= "number" or n ~= math.floor(n) or n < -MAX_COORD or n > MAX_COORD then return false end
+    end
+    return true
+end
+
+-- Sign a GPS certificate saying that the GPS key `key` (hex), on computer `id`, is at x, y, z.
+function trust.issueGps(rootSeed, rootPublic, id, key, x, y, z, lifetime)
+    local now = os.epoch("utc")
+    local cert = {
+        id = id, key = key, x = x, y = y, z = z, root = crypto.toHex(rootPublic),
+        issued = now, expires = now + lifetime,
+    }
+    cert.sig = crypto.toHex(crypto.sign(rootSeed, gpsText(cert), rootPublic))
+    return cert
+end
+
+-- Whether a GPS certificate is well formed, current and signed by its root. Doesn't check trust.
+function trust.gpsCertIntact(cert)
+    return type(cert) == "table" and type(cert.id) == "number" and crypto.isHex(cert.key, 64)
+        and trust.validPosition(cert.x, cert.y, cert.z) and type(cert.root) == "string"
+        and type(cert.issued) == "number" and type(cert.expires) == "number"
+        and cert.expires > os.epoch("utc") and checkSignature(cert.root, gpsText(cert), cert.sig)
+end
+
 -- Roots ---------------------------------------------------------------------------------------
 
 local function allRoots()

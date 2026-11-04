@@ -12,6 +12,7 @@ local DIR = "/etc/root-server"
 local KEY = fs.combine(DIR, "key")
 local CONFIG = fs.combine(DIR, "config")
 local REQUESTS = fs.combine(DIR, "requests")
+local GPS = fs.combine(DIR, "gps")
 
 local DAY = 24 * 3600 * 1000
 local MAX_PENDING = 32
@@ -51,6 +52,7 @@ function db.setup(name, tld)
     local seed, public = crypto.signingKeypair()
     util.writeTable(KEY, { seed = crypto.toHex(seed), key = crypto.toHex(public) })
     util.writeTable(REQUESTS, {})
+    util.writeTable(GPS, {})
     refreshAdvert(name)
     db.setConfig({ zone = trust.signZone(seed, public, tld or trust.tldFromName(name)) })
 end
@@ -224,6 +226,108 @@ function db.handle(name, key, from)
     if pending >= MAX_PENDING then return { status = "error", message = "Too many requests are waiting." } end
 
     setRequest(key, { name = name, from = from, status = "pending", requested = os.epoch("utc"), barred = barred })
+    return { status = "pending" }
+end
+
+-- GPS hosts ------------------------------------------------------------------------------------
+-- A GPS certificate says where a GPS host is, and which key signs its answers. It's separate from
+-- a computer's name certificate, so a computer can hold both. Entries are by the computer's key,
+-- proven by its handshake, and `gpsKey` is the key its GPS answers are signed with.
+
+function db.gpsRequests()
+    return util.readTable(GPS) or {}
+end
+
+local function setGps(key, entry)
+    local all = db.gpsRequests()
+    all[key] = entry
+    util.writeTable(GPS, all)
+end
+
+-- Every GPS request, pending ones first.
+function db.gpsList()
+    local out = {}
+    for key, entry in pairs(db.gpsRequests()) do
+        entry.key = key
+        out[#out + 1] = entry
+    end
+    table.sort(out, function(a, b)
+        if (a.status == "pending") ~= (b.status == "pending") then return a.status == "pending" end
+        return a.from < b.from
+    end)
+    return out
+end
+
+local function sameGps(entry, gpsKey, x, y, z, from)
+    return entry.gpsKey == gpsKey and entry.x == x and entry.y == y and entry.z == z and entry.from == from
+end
+
+local function signGps(entry)
+    local seed, public = db.keypair()
+    return trust.issueGps(seed, public, entry.from, entry.gpsKey, entry.x, entry.y, entry.z, db.config().days * DAY)
+end
+
+-- Only sign what the admin actually saw, as with names.
+function db.approveGps(key, gpsKey, x, y, z, from)
+    local function asReviewedGps()
+        local entry = db.gpsRequests()[key]
+        return entry and entry.status == "pending" and sameGps(entry, gpsKey, x, y, z, from)
+    end
+    if not asReviewedGps() then return false, "The request has changed since you opened it. Review it again." end
+    local cert = signGps(db.gpsRequests()[key]) -- yields
+    if not asReviewedGps() then return false, "The request has changed since you opened it. Review it again." end
+    local entry = db.gpsRequests()[key]
+    entry.status, entry.cert = "issued", cert
+    setGps(key, entry)
+    return true
+end
+
+function db.setGpsStatus(key, status)
+    local entry = db.gpsRequests()[key]
+    entry.status, entry.cert = status, nil
+    setGps(key, entry)
+end
+
+function db.forgetGps(key)
+    setGps(key, nil)
+end
+
+-- Answer a computer asking to be a GPS host. `key` is proven by its handshake. Moving a host means
+-- asking again with the new position, which has to be approved again.
+function db.handleGps(payload, key, from, name)
+    local gpsKey, x, y, z = payload.key, payload.x, payload.y, payload.z
+    if not crypto.isHex(gpsKey, 64) then return { status = "error", message = "That isn't a GPS key." } end
+    if not trust.validPosition(x, y, z) then
+        return { status = "error", message = "A position is three whole numbers inside the world." }
+    end
+    local entry = db.gpsRequests()[key]
+    if entry and (entry.status == "denied" or entry.status == "revoked") then return { status = "denied" } end
+    if entry and entry.status == "issued" and sameGps(entry, gpsKey, x, y, z, from) then
+        if entry.cert.expires - os.epoch("utc") < db.config().days * DAY / 2 then
+            local cert = signGps(entry)
+            entry = db.gpsRequests()[key]
+            if not entry or entry.status ~= "issued" or not sameGps(entry, gpsKey, x, y, z, from) then
+                return { status = "denied" }
+            end
+            entry.cert = cert
+            setGps(key, entry)
+        end
+        return { status = "issued", cert = entry.cert }
+    end
+    if entry and entry.status == "pending" and sameGps(entry, gpsKey, x, y, z, from) then
+        return { status = "pending" }
+    end
+
+    local pending = 0
+    for other, waiting in pairs(db.gpsRequests()) do
+        if other ~= key and waiting.status == "pending" then pending = pending + 1 end
+    end
+    if pending >= MAX_PENDING then return { status = "error", message = "Too many requests are waiting." } end
+
+    setGps(key, {
+        from = from, gpsKey = gpsKey, x = x, y = y, z = z, name = type(name) == "string" and name or nil,
+        status = "pending", requested = os.epoch("utc"),
+    })
     return { status = "pending" }
 end
 

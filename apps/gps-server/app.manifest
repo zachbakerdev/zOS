@@ -1,0 +1,9 @@
+{
+    name = "GPS Server",
+    description = "Tell nearby computers where they are, vouched for by a root server",
+    version = "1.0.0",
+    minZos = "1.14.0",
+    author = "zOS",
+    devices = { "computer" },
+    admin = true,
+}

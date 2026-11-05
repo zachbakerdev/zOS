@@ -320,23 +320,29 @@ Best times belong to each user, in `/home/<user>/.config/minesweeper/`.
 
 ### Strip Mine
 
-**Strip Mine** digs a row of parallel tunnels with a mining turtle. Put the turtle on the floor
-where the mine should start, facing the way the tunnels should go, with a chest right behind it.
-Open Strip Mine on the turtle, choose **New mine**, set it up and choose **Start mining**.
+**Strip Mine** digs a branch mine with a mining turtle: a corridor going straight out from the
+start, with branches going sideways off it. Put the turtle on the floor where the mine should
+start, facing the way the corridor should go, with a chest right behind it. Open Strip Mine on the
+turtle, choose **New mine**, set it up and choose **Start mining**.
 
-The tunnels start from a corridor that runs sideways from the start, so they're always joined at
-the near end. **Far ends: joined** digs a second corridor across the far ends, and the turtle
-snakes up one tunnel and down the next.
+The turtle remembers the mine it's digging. Next time, choose **Dig more** and say how many more
+branches: it walks up the corridor past the branches it has already dug, lengthens the corridor as
+far as it needs to, and digs the new ones in the next free places. A branch that was left short,
+because the job was cancelled or got stuck, is finished first. **Mine map** shows what's been dug
+from above, and **Mine totals** what every job together dug and found. The corridor, spacing and
+side can't change once a mine is started, so the branches always line up. **Forget this mine** (in
+Dig more) starts over, for a new mine somewhere else.
 
 | setting | what it does |
 |---------|--------------|
-| Length | How far each tunnel goes, from the corridor |
-| Tunnels | How many tunnels to dig |
-| Spacing | Solid blocks left between tunnels. 2 finds nearly every ore with vein mining on |
-| Side | Whether the tunnels spread out to the right, to the left or both ways |
-| Size | 1 wide and 2 high, 1 wide and 3 high, or 3 by 3 |
-| Far ends | Whether to join the tunnels at the far end too |
-| Torches | How many blocks apart to put torches, or 0 for none. In a 1x2 tunnel they go in a small niche in the wall, otherwise on the floor |
+| Length | How far each new branch goes, from the side of the corridor |
+| Branches | How many new branches to dig. With branches on both sides, each side counts as one |
+| Side | Whether the branches go to the right, to the left or both ways. Fixed once the mine is started |
+| Spacing | Solid blocks left between branches. 2 finds nearly every ore with vein mining on. Fixed once the mine is started |
+| Corridor size | 1 wide and 2 high, 1 wide and 3 high, or 3 by 3. Fixed once the mine is started |
+| Branch size | The same choices, for the branches. Fixed once the mine is started |
+| Lengthen old | Make branches an earlier job dug shorter than Length as long as Length, too |
+| Torches | How many blocks apart to put torches, or 0 for none. In a 2 high branch or corridor they go in a small niche in the wall, otherwise on the floor. In the corridor they stay clear of where the branches start |
 | Vein mining | Dig out any ore it sees in the walls, floor or ceiling, and the rest of the vein, up to 8 blocks from the tunnel |
 | Seal hazards | Fill holes in the floor, and block off lava and water in the walls, with blocks it dug |
 | Junk | Throw away stone, dirt, gravel and the like instead of carrying them. **Add from the turtle** adds whatever's in its inventory. Choose an item to keep some of it: it carries up to that many each trip, seals with them first, and puts the rest in the chest |
@@ -362,16 +368,18 @@ While it works, its screen shows how far it has got, its fuel and what it has fo
 | H | Go back to the chest and wait there |
 | R | Resume |
 | C | Go back to the chest and end the mine |
+| V | The map of the mine, with where the turtle is |
 | M | The computers allowed to control it |
 | Q | Leave the app. The mine carries on |
 
 **Watching from another computer.** Open Strip Mine on a computer or pocket computer to see the
 mining turtles in range, through a wireless modem on each. Anyone in range can see what a turtle is
 doing. To control one, choose it and press **A**. Then, on the turtle, choose **Remote control**,
-compare the fingerprint and allow it. The same keys then work from that computer. The turtle uses
-port 4204.
+compare the fingerprint and allow it. The same keys then work from that computer, as does **V** for
+the map, and **D** to dig more branches once a job is over. Dig more uses the settings the turtle's
+last job was started with. The turtle uses port 4204.
 
-The job, and the computers allowed to control it, are in `/etc/strip-mine/`. The last settings
+The job, the mine's record and the computers allowed to control it are in `/etc/strip-mine/`. The last settings
 used belong to each user, in `/home/<user>/.config/strip-mine/`.
 
 ## Networking

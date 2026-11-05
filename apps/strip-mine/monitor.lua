@@ -8,7 +8,9 @@ status that comes back, and every later request goes only to that key. ]]
 local ui = require("ui")
 local crypto = require("crypto")
 local jobs = require("jobs")
+local minemap = require("minemap")
 local net = require("net")
+local plan = require("plan")
 local trust = require("trust")
 
 local TITLE = "Strip Mine"
@@ -57,8 +59,8 @@ local function pair(turtle)
         "\n\nThe turtle's fingerprint is:\n" .. tostring(turtle.fingerprint))
 end
 
-local function send(turtle, op)
-    local reply, err = ask(turtle, { op = "command", command = op })
+local function send(turtle, op, count)
+    local reply, err = ask(turtle, { op = "command", command = op, count = count })
     if not reply then return ui.message(TITLE, "Couldn't reach it: " .. tostring(err), ui.theme.bad) end
     local p = type(reply.payload) == "table" and reply.payload or {}
     if p.denied then
@@ -77,7 +79,59 @@ local KEYS = {
     stuck = { { "r", "resume", "retry" }, { "c", "cancel", "cancel" } },
 }
 
-local function draw(turtle, s, problem)
+-- How many more branches to dig, or nil.
+local function askCount()
+    local range, err = plan.LIMITS.count, nil
+    while true do
+        ui.screen(TITLE .. " - Dig more")
+        ui.text("How many more branches to dig, with the settings the turtle last used. Any it left " ..
+            "short are finished first.", ui.theme.dim)
+        ui.text("")
+        if err then
+            ui.text(err, ui.theme.bad)
+            ui.text("")
+        end
+        local typed = ui.input(("1 to %d"):format(range[2]), nil, "4")
+        if typed == "" then return nil end
+        local n = tonumber(typed)
+        if n and n == math.floor(n) and n >= 1 and n <= range[2] then return n end
+        err = ("Enter a whole number from 1 to %d."):format(range[2])
+    end
+end
+
+local function hintsFor(turtle, s, mapping)
+    local hints = {}
+    for _, k in ipairs(s and not s.lost and KEYS[s.status] or {}) do hints[#hints + 1] = k[1]:upper() .. ":" .. k[3] end
+    if s and s.canMore and turtle.allowed then hints[#hints + 1] = "D:dig more" end
+    if not turtle.allowed then hints[#hints + 1] = "A:ask" end
+    hints[#hints + 1] = mapping and "V:status" or "V:map"
+    hints[#hints + 1] = "Q:back"
+    return hints
+end
+
+local function footer(hints)
+    local width, rows = term.getSize()
+    local lines = ui.wrap(table.concat(hints, "  "), width - 2)
+    for i, text in ipairs(lines) do ui.at(2, rows - #lines + i, text, ui.theme.dim) end
+    return #lines
+end
+
+local function drawMap(turtle, s, problem)
+    local _, rows = term.getSize()
+    ui.screen(TITLE .. " - " .. turtle.name, s and s.percent and (s.percent .. "%") or nil)
+    if problem then
+        ui.text(problem, ui.theme.bad)
+    elseif s then
+        local text, color = jobs.describe(s)
+        ui.text(text, color and ui.theme[color] or ui.theme.fg)
+    end
+    local used = footer(hintsFor(turtle, s, true))
+    ui.at(2, rows - used, minemap.LEGEND, ui.theme.dim)
+    minemap.draw(s and s.map, 4, rows - used - 1)
+end
+
+local function draw(turtle, s, problem, mapping)
+    if mapping then return drawMap(turtle, s, problem) end
     local width, height = term.getSize()
     ui.screen(TITLE .. " - " .. turtle.name, s and s.percent and (s.percent .. "%") or nil)
     if problem then
@@ -97,20 +151,19 @@ local function draw(turtle, s, problem)
             local finds = jobs.finds(stats, 3)
             if finds ~= "" then ui.text("Found: " .. finds) end
         end
+        local t = s.totals
+        if t then
+            ui.text(("Mine: %s, %s found"):format(plural(t.branches, "branch", "branches"),
+                jobs.finds(t, 2) ~= "" and jobs.finds(t, 2) or "nothing"), ui.theme.dim)
+        end
     else
         ui.text("Asking...", ui.theme.dim)
     end
-    local hints = {}
-    for _, k in ipairs(s and not s.lost and KEYS[s.status] or {}) do hints[#hints + 1] = k[1]:upper() .. ":" .. k[3] end
-    if not turtle.allowed then hints[#hints + 1] = "A:ask" end
-    hints[#hints + 1] = "Q:back"
-    local _, rows = term.getSize()
-    local lines = ui.wrap(table.concat(hints, "  "), width - 2)
-    for i, text in ipairs(lines) do ui.at(2, rows - #lines + i, text, ui.theme.dim) end
+    footer(hintsFor(turtle, s, false))
 end
 
 local function watch(turtle)
-    local summary, problem
+    local summary, problem, mapping
     local timer = os.startTimer(0)
     while true do
         local event, a = os.pullEvent()
@@ -125,7 +178,7 @@ local function watch(turtle)
             else
                 problem = "Couldn't reach it: " .. tostring(err or "it didn't answer properly")
             end
-            draw(turtle, summary, problem)
+            draw(turtle, summary, problem, mapping)
             timer = os.startTimer(POLL)
         elseif event == "key" and a == keys.backspace then
             return
@@ -134,6 +187,11 @@ local function watch(turtle)
             if c == "q" then return end
             if c == "a" then
                 pair(turtle)
+            elseif c == "v" then
+                mapping = not mapping
+            elseif c == "d" and summary and summary.canMore and turtle.allowed then
+                local n = askCount()
+                if n then send(turtle, "more", n) end
             else
                 for _, k in ipairs(summary and not summary.lost and KEYS[summary.status] or {}) do
                     if c == k[1] then
@@ -148,7 +206,7 @@ local function watch(turtle)
                     end
                 end
             end
-            draw(turtle, summary, problem)
+            draw(turtle, summary, problem, mapping)
             timer = os.startTimer(0)
         end
     end

@@ -1,6 +1,6 @@
 {
     name = "Strip Mine",
     description = "Dig a strip mine with a turtle, and watch it from other computers",
-    version = "1.0.0",
+    version = "1.1.0",
     author = "zOS",
 }

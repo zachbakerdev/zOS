@@ -9,6 +9,7 @@ if not turtle then return end
 local jobs = require("jobs")
 local miner = require("miner")
 local net = require("net")
+local plan = require("plan")
 local system = require("system")
 local util = require("util")
 
@@ -37,6 +38,7 @@ local function mining()
             running = true
             local ok, err = pcall(function() miner.new(job, io).run() end)
             running, queue = false, {}
+            if ok then ok, err = pcall(jobs.settle) end
             if not ok then
                 system.log(app.id .. ": " .. tostring(err))
                 -- Couldn't even save: wait to be asked again rather than trying over and over.
@@ -48,9 +50,31 @@ local function mining()
     end
 end
 
+-- Starts a job digging `count` more branches, with the settings the last one was started with.
+local function more(count)
+    if jobs.isActive(jobs.load()) then return false, "It's already got a mine going." end
+    local mine = jobs.mine()
+    if not mine or type(mine.settings) ~= "table" then
+        return false, "Start a mine at the turtle first, so it knows how to dig."
+    end
+    local range = plan.LIMITS.count
+    if type(count) ~= "number" or count ~= math.floor(count) or count < 1 or count > range[2] then
+        return false, ("Choose from 1 to %d branches."):format(range[2])
+    end
+    local settings = plan.check(mine.settings)
+    if not settings then return false, "The last settings can't be used. Start the mine at the turtle." end
+    settings.count = count
+    local job, err = jobs.newJob(settings)
+    if not job then return false, err end
+    jobs.save(job)
+    os.queueEvent(jobs.WAKE)
+    return true
+end
+
 -- Does what the app or an allowed computer asked. Returns true, or false and why not.
-local function command(op)
+local function command(op, arg)
     if running then
+        if op == "more" then return false, "It's busy mining." end
         if op == "pause" or op == "home" or op == "cancel" then
             queue[#queue + 1] = op
             return true
@@ -63,6 +87,7 @@ local function command(op)
         os.queueEvent(jobs.WAKE)
         return true
     end
+    if op == "more" then return more(arg) end
     if not jobs.isActive(job) then return false, "There's no mine to change." end
     if op == "pause" then return true end
     if op == "putback" then
@@ -85,15 +110,16 @@ local function command(op)
         return false, "Unknown command."
     end
     jobs.save(job)
+    jobs.settle()
     os.queueEvent(jobs.WAKE)
     return true
 end
 
 local function local_()
     while true do
-        local _, op = os.pullEventRaw(jobs.COMMAND)
+        local _, op, arg = os.pullEventRaw(jobs.COMMAND)
         if type(op) == "string" then
-            local ok, err = pcall(command, op)
+            local ok, err = pcall(command, op, arg)
             if not ok then system.log(app.id .. ": " .. tostring(err)) end
         end
     end
@@ -125,7 +151,7 @@ local function handle(msg)
     elseif p.op == "command" then
         if not allowed then return { error = "This computer isn't allowed to control " .. name() .. ".", denied = true } end
         if type(p.command) ~= "string" or not jobs.COMMANDS[p.command] then return { error = "Unknown command." } end
-        local ok, err = command(p.command)
+        local ok, err = command(p.command, p.count)
         return { ok = ok, error = err }
     end
     return { error = "Unknown request" }

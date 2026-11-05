@@ -8,7 +8,7 @@ if not turtle then return require("monitor")(session, app) end
 local ui = require("ui")
 local crypto = require("crypto")
 local jobs = require("jobs")
-local miner = require("miner")
+local minemap = require("minemap")
 local plan = require("plan")
 local trust = require("trust")
 local util = require("util")
@@ -145,11 +145,21 @@ end
 -- Starting -----------------------------------------------------------------------------------------
 
 local function start(config)
-    local steps = plan.steps(config)
-    local estimate = plan.estimate(config, steps)
+    -- A remote computer may have started one meanwhile.
+    if jobs.isActive(jobs.load()) then
+        ui.message(TITLE, "It's already mining. Go back to watch it.")
+        return true
+    end
+    local job, err = jobs.newJob(config)
+    if not job then
+        ui.message(TITLE, err, ui.theme.bad)
+        return false
+    end
+    local steps = plan.steps(job.config)
+    local estimate = plan.estimate(job.config, steps)
     local level = turtle.getFuelLevel()
     ui.screen(TITLE .. " - Start")
-    ui.text("The turtle should be on the floor where the mine starts, facing the way the tunnels go, " ..
+    ui.text("The turtle should be on the floor where the mine starts, facing the way the corridor goes, " ..
         "with a chest right behind it.")
     ui.text("")
     ui.text(("Needs about %d fuel (%s). It has %s, and takes more from the chest."):format(
@@ -157,29 +167,48 @@ local function start(config)
     if config.torches > 0 then ui.text("Put torches in the chest or the turtle.", ui.theme.dim) end
     ui.text("")
     if not ui.confirm("Start mining?") then return false end
-    local job = miner.newJob(config)
-    job.stats.started = os.epoch("utc")
+    if jobs.isActive(jobs.load()) then return true end
     jobs.save(job)
     jobs.command("start")
     return true
 end
 
+-- What a job with these settings would dig, as a hint for the menu.
+local function workText(config)
+    local new, short = config.newBranches, #config.work - config.newBranches
+    local parts = {}
+    if new > 0 then parts[#parts + 1] = plural(new, "new branch", "new branches") end
+    if short > 0 then parts[#parts + 1] = plural(short, "old branch", "old branches") .. " made longer" end
+    if #parts == 0 then return "Nothing to dig" end
+    return table.concat(parts, ", ")
+end
+
+local LOCKED = "This mine's layout can't change now that it's started. Choose Forget this mine to " ..
+    "start a new one with a different layout."
+
 local function setup()
     local config = loadSettings()
     local selected = 1
     while true do
-        local size, side = plan.size(config), plan.side(config)
-        local estimate = plan.estimate(config, plan.steps(config))
+        local mine = jobs.mine()
+        local job = plan.assign(config, mine)
+        local corridor, branch, side = plan.size(job.corridor), plan.size(job.branch), plan.side(job)
+        local estimate = plan.estimate(job, plan.steps(job))
+        local lock = mine and " (fixed)" or ""
         local items = {
             { label = "Length: " .. plural(config.length, "block"), key = "length",
-              hint = "How far each tunnel goes" },
-            { label = "Tunnels: " .. config.count, key = "count", hint = "How many tunnels to dig" },
-            { label = "Spacing: " .. plural(config.spacing, "block"), key = "spacing",
-              hint = "Solid blocks left between tunnels" },
-            { label = "Side: " .. side.label, key = "side", hint = "Which way the tunnels spread out" },
-            { label = "Size: " .. size.label, key = "size", hint = "The tunnels' cross-section" },
-            { label = "Far ends: " .. (config.connect and "joined" or "not joined"), key = "connect",
-              hint = "Join the tunnels at the far end too" },
+              hint = "How far each new branch goes" },
+            { label = "Branches: " .. config.count, key = "count",
+              hint = mine and "How many more to dig" or "How many to dig" },
+            { label = "Side: " .. side.label .. lock, key = "side", hint = "Which way the branches go" },
+            { label = "Spacing: " .. plural(job.spacing, "block") .. lock, key = "spacing",
+              hint = "Solid blocks left between branches" },
+            { label = "Corridor size: " .. corridor.label .. lock, key = "corridor",
+              hint = "The corridor's cross-section" },
+            { label = "Branch size: " .. branch.label .. lock, key = "branch",
+              hint = "The branches' cross-section" },
+            { label = "Lengthen old: " .. (config.extend and "yes" or "no"), key = "extend",
+              hint = "Make shorter branches as long as Length" },
             { label = "Torches: " .. (config.torches > 0 and "every " .. config.torches or "off"), key = "torches",
               hint = "How far apart to put torches" },
             { label = "Vein mining: " .. (config.vein and "on" or "off"), key = "vein",
@@ -188,32 +217,48 @@ local function setup()
               hint = "Fill holes in the floor, block lava and water" },
             { label = "Junk: " .. (config.junk and plural(#config.junkList, "item") or "kept"), key = "junk",
               submenu = true, hint = "What to throw away" },
-            { label = "Start mining", key = "start", fg = ui.theme.good,
-              hint = ("About %d fuel, %s"):format(estimate.fuel, plural(plan.coal(estimate.fuel), "coal")) },
-            { label = "Back", fg = ui.theme.dim },
         }
-        selected = ui.menu({ title = TITLE .. " - New mine", items = items, selected = selected, back = true })
+        if mine then
+            items[#items + 1] = { label = "Forget this mine", key = "forget", fg = ui.theme.bad,
+                hint = "Start a new mine from scratch" }
+        end
+        items[#items + 1] = { label = "Start mining", key = "start", fg = ui.theme.good,
+            hint = ("%s: about %d fuel, %s"):format(workText(job), estimate.fuel, plural(plan.coal(estimate.fuel), "coal")) }
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+        selected = ui.menu({ title = TITLE .. (mine and " - Dig more" or " - New mine"), items = items,
+            selected = selected, back = true })
         local key = selected and items[selected].key
         if not key then return end
-        if key == "length" then
-            config.length = askNumber("Length", "How many blocks forward each tunnel goes, from the corridor.",
+        local layout = key == "side" or key == "spacing" or key == "corridor" or key == "branch"
+        if layout and mine then
+            ui.message(TITLE, LOCKED)
+        elseif key == "length" then
+            config.length = askNumber("Length", "How many blocks each new branch goes out from the corridor. " ..
+                "With Lengthen old on, shorter branches are made this long too.",
                 config.length, plan.LIMITS.length) or config.length
         elseif key == "count" then
-            config.count = askNumber("Tunnels", "How many tunnels to dig.", config.count, plan.LIMITS.count) or config.count
+            config.count = askNumber("Branches", "How many new branches to dig. Any that an earlier job " ..
+                "left short are finished first, as well.", config.count, plan.LIMITS.count) or config.count
         elseif key == "spacing" then
-            config.spacing = askNumber("Spacing", "How many solid blocks to leave between tunnels. 2 finds " ..
+            config.spacing = askNumber("Spacing", "How many solid blocks to leave between branches. 2 finds " ..
                 "almost every ore while vein mining is on.", config.spacing, plan.LIMITS.spacing) or config.spacing
         elseif key == "torches" then
             config.torches = askNumber("Torches", "How many blocks apart to put torches. 0 puts none.",
                 config.torches, plan.LIMITS.torches) or config.torches
         elseif key == "side" then
             config.side = cycle(plan.SIDES, config.side)
-        elseif key == "size" then
-            config.size = cycle(plan.SIZES, config.size)
-        elseif key == "connect" or key == "vein" or key == "seal" then
+        elseif key == "corridor" or key == "branch" then
+            config[key] = cycle(plan.SIZES, config[key])
+        elseif key == "extend" or key == "vein" or key == "seal" then
             config[key] = not config[key]
         elseif key == "junk" then
             editJunk(config)
+        elseif key == "forget" then
+            ui.screen(TITLE .. " - Forget")
+            ui.text("The turtle forgets which branches it has dug here, and the next job starts a new mine " ..
+                "from the chest. Nothing in the world changes.")
+            ui.text("")
+            if ui.confirm("Forget this mine?") then jobs.forgetMine() end
         elseif key == "start" then
             saveSettings(config)
             if start(config) then return true end
@@ -270,6 +315,50 @@ local function remotes()
     end
 end
 
+-- The mine -----------------------------------------------------------------------------------------
+
+-- The map, kept up to date until a key is pressed.
+local function showMap()
+    while true do
+        local job = jobs.load()
+        local s = jobs.summary(job, turtle.getFuelLevel())
+        local _, rows = term.getSize()
+        ui.screen(TITLE .. " - Map")
+        local t = s.totals
+        if t then
+            ui.text(("%s, %d blocks of them, corridor %d"):format(plural(t.branches, "branch", "branches"),
+                t.length, t.corridor), ui.theme.dim)
+        end
+        minemap.draw(s.map, 4, rows - 1)
+        ui.at(2, rows, minemap.LEGEND .. "  Q:back", ui.theme.dim)
+        local timer = os.startTimer(REFRESH)
+        while true do
+            local event, a = os.pullEvent()
+            if event == "timer" and a == timer then break end
+            if event == "key" or event == "char" then return end
+        end
+    end
+end
+
+local function showTotals()
+    local t = jobs.totals(jobs.load())
+    if not t then return end
+    local lines = {
+        plural(t.branches, "branch", "branches") .. ", " .. plural(t.length, "block") .. " long in all",
+        "Corridor " .. plural(t.corridor, "block") .. " long",
+        plural(t.jobs, "job"),
+        plural(t.blocks, "block") .. " dug",
+        plural(t.trips, "trip") .. " to the chest",
+        plural(t.torches, "torch", "torches") .. " placed",
+        plural(t.sealed, "hole") .. " sealed",
+        "",
+        "Put in the chest:",
+    }
+    local finds = jobs.finds(t)
+    lines[#lines + 1] = finds ~= "" and finds or "nothing"
+    ui.pager(TITLE .. " - This mine", table.concat(lines, "\n"))
+end
+
 -- Watching -----------------------------------------------------------------------------------------
 
 local KEYS = {
@@ -305,6 +394,7 @@ local function drawStatus(s)
     if waiting > 0 then ui.text(plural(waiting, "computer") .. " asking for remote control: M", ui.theme.accent) end
     local hints = {}
     for _, k in ipairs(keysFor(s)) do hints[#hints + 1] = k[1]:upper() .. ":" .. k[3] end
+    hints[#hints + 1] = "V:map"
     hints[#hints + 1] = "M:remote"
     hints[#hints + 1] = "Q:leave"
     local _, rows = term.getSize()
@@ -331,6 +421,10 @@ local function watch()
                     remotes()
                     break
                 end
+                if c == "v" then
+                    showMap()
+                    break
+                end
                 for _, k in ipairs(keysFor(s)) do
                     if c == k[1] then
                         if k[2] == "cancel" then
@@ -355,7 +449,8 @@ local function lastJob(job)
     local stats = s.stats or {}
     local lines = {
         (jobs.describe(s)),
-        ("%d tunnels, %d long, %d apart, %s"):format(s.config.count, s.config.length, s.config.spacing, s.config.size),
+        ("%s, %d long, %s corridor"):format(plural(s.config.branches, "branch", "branches"), s.config.length,
+            s.config.corridor),
         plural(stats.blocks or 0, "block") .. " dug",
         plural(stats.trips or 0, "trip") .. " to the chest",
         plural(stats.torches or 0, "torch", "torches") .. " placed",
@@ -368,7 +463,7 @@ local function lastJob(job)
     lines[#lines + 1] = "Put in the chest:"
     local finds = jobs.finds(stats)
     lines[#lines + 1] = finds ~= "" and finds or "nothing"
-    ui.pager(TITLE .. " - Last mine", table.concat(lines, "\n"))
+    ui.pager(TITLE .. " - Last job", table.concat(lines, "\n"))
 end
 
 local selected = 1
@@ -378,11 +473,17 @@ while true do
         if watch() == "quit" then return end
     else
         local waiting = #jobs.requests()
+        local mine = jobs.mine()
         local items = {
-            { label = "New mine", action = setup, submenu = true, hint = "Choose the size and start" },
+            { label = mine and "Dig more" or "New mine", action = setup, submenu = true,
+              hint = mine and "More branches off the corridor" or "Choose the size and start" },
         }
+        if mine then
+            items[#items + 1] = { label = "Mine map", action = showMap, hint = "What's been dug here" }
+            items[#items + 1] = { label = "Mine totals", action = showTotals, hint = "Everything every job found" }
+        end
         if job then
-            items[#items + 1] = { label = "Last mine: " .. (jobs.describe(jobs.summary(job))), action = function() lastJob(job) end,
+            items[#items + 1] = { label = "Last job: " .. (jobs.describe(jobs.summary(job))), action = function() lastJob(job) end,
                 hint = "What it found" }
         end
         items[#items + 1] = { label = "Remote control" .. (waiting > 0 and " (" .. waiting .. " asking)" or ""),

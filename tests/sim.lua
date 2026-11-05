@@ -132,7 +132,7 @@ local function newTerm(computer)
   end
   function t.write(s)
     local line = screen[y] or blank()
-    screen[y] = (line:sub(1, x - 1) .. s .. line:sub(x + #s + 1)):sub(1, w)
+    screen[y] = (line:sub(1, x - 1) .. s .. line:sub(x + #s)):sub(1, w)
     x = x + #s
   end
   function t.setTextColor() end

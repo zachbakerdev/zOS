@@ -3,7 +3,7 @@
 local util = require("util")
 
 local system = {
-    VERSION = "1.14.1",
+    VERSION = "1.14.2",
     ROOT = "/.zos",
     DATA = "/etc/zos",
 }

@@ -14,7 +14,8 @@ around its cross-section. Anything that leaves the lane, such as following a vei
 in job.path, so the turtle can always walk back to the lane and start the step again.
 
 job fields:
-  config            the settings, from plan.check
+  id                when the job was made, so the mine's record adds it in only once
+  config            the settings, from plan.assign
   status            "running", "paused", "stuck", "finished" or "cancelled"
   phase             "work" at the steps, "out" to the chest, "chest" at it, or "back" to the steps
   reason            why it's going to or is at the chest: "start", "full", "fuel", "home",
@@ -51,10 +52,10 @@ miner.LOST = "Strip Mine lost track of where it is."
 
 local function stuck(message) error({ stuck = message }, 0) end
 
--- A new job, which starts by visiting the chest to unload and refuel.
-function miner.newJob(config)
+-- A new job, which starts by visiting the chest to unload and refuel. `id` is anything unique.
+function miner.newJob(config, id)
     return {
-        config = config, status = "running", phase = "chest", reason = "start",
+        id = id, config = config, status = "running", phase = "chest", reason = "start",
         step = 1, stage = "enter", pos = { x = 0, y = 0, z = 0, f = 0 }, path = {},
         stats = { blocks = 0, trips = 0, torches = 0, sealed = 0, items = {}, started = nil },
     }
@@ -195,7 +196,7 @@ function miner.new(job, io)
         end
         job.seen[#job.seen + 1] = { k, name }
         if #job.seen > REMEMBER then table.remove(job.seen, 1) end
-        if plan.inside(shape, cfg, x, y, z) then return end
+        if plan.inside(shape, x, y, z) then return end
         for i = #job.holes, 1, -1 do
             if job.holes[i] == k then table.remove(job.holes, i) end
         end
@@ -353,7 +354,7 @@ function miner.new(job, io)
 
     local function lane(i)
         if i < 1 then return { 0, 0, 0 } end
-        return { steps[i].x, shape.travel, steps[i].z }
+        return { steps[i].x, steps[i].y, steps[i].z }
     end
 
     -- Where the turtle goes back to after the chest: the step it's on, or the one before if it
@@ -431,17 +432,18 @@ function miner.new(job, io)
     -- Clears the cross-section of step i from its lane cell, and looks at what's around it.
     local function slice(i)
         local s = steps[i]
+        local cs = shape[s.kind]
         local looking = cfg.vein or cfg.seal
         local left, right = (s.dir + 3) % 4, (s.dir + 1) % 4
-        for o = -shape.half, shape.half do
+        for o = -cs.half, cs.half do
             local base = #job.path
             if o ~= 0 then
                 turnTo(o < 0 and left or right)
                 push("fwd")
             end
             local sides = {}
-            if o <= 0 and o == -shape.half then sides[#sides + 1] = left end
-            if o >= 0 and o == shape.half then sides[#sides + 1] = right end
+            if o <= 0 and o == -cs.half then sides[#sides + 1] = left end
+            if o >= 0 and o == cs.half then sides[#sides + 1] = right end
             if looking then
                 local function level(y)
                     -- Facing whichever side it already faces first saves a turn.
@@ -451,7 +453,7 @@ function miner.new(job, io)
                         check("fwd")
                     end
                     if y == 0 then check("down", true) end
-                    if y == shape.height - 1 then check("up") end
+                    if y == cs.height - 1 then check("up") end
                 end
                 local column = #job.path
                 level(P.y)
@@ -460,13 +462,13 @@ function miner.new(job, io)
                     level(P.y)
                 end
                 unwind(column)
-                for _ = P.y + 1, shape.height - 1 do
+                for _ = P.y + 1, cs.height - 1 do
                     push("up")
                     level(P.y)
                 end
                 unwind(column)
             else
-                if P.y < shape.height - 1 then clear("up") end
+                if P.y < cs.height - 1 then clear("up") end
                 if P.y > 0 then clear("down") end
             end
             unwind(base)
@@ -535,7 +537,7 @@ function miner.new(job, io)
         local function add(x, y, z) open[plan.key(x, y, z)] = false end
         local reached = job.stage == "slice" and job.step or job.step - 1
         for i = 1, math.min(reached, #steps) do
-            add(steps[i].x, shape.travel, steps[i].z)
+            add(steps[i].x, steps[i].y, steps[i].z)
             if steps[i].slice and i < job.step then
                 for _, c in ipairs(plan.section(shape, steps[i])) do add(c[1], c[2], c[3]) end
             end
@@ -844,7 +846,7 @@ function miner.new(job, io)
             if job.stage == "enter" then
                 unwind()
                 local s = steps[i]
-                local need = plan.homeBound(shape, s.x, s.z) + plan.sliceMoves(cfg, shape) + VEIN_REACH * 2 + MARGIN
+                local need = plan.homeBound(shape, s.x, s.z) + plan.sliceMoves(cfg, shape[s.kind]) + VEIN_REACH * 2 + MARGIN
                 if fuel() < need then refuelTo(need + 10 * plan.COAL) end
                 if fuel() < need then return startTrip("fuel") end
                 if freeSlots() == 0 then dropJunk() end

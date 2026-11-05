@@ -5,12 +5,22 @@ Coordinates are relative to where the turtle starts, on the floor with the chest
 the right, y is up and z is forward. Facings are 0 forward (+z), 1 right (+x), 2 back (-z) and 3
 left (-x), so turning right adds 1.
 
-A mine is a corridor running sideways from the start, with tunnels going forward from it. The turtle
-walks one lane through the middle of every tunnel and corridor, at height `travel`, and clears the
-rest of the tunnel's cross-section around it. The plan is the list of lane cells it visits, in
-order, each one adjacent to the last. ]]
+A mine is a corridor going forward from the start, with branches going sideways from it. Branches
+sit in slots along the corridor, one every `pitch` blocks, and a slot has room for a branch on each
+side. The corridor and the branches each have their own cross-section. The turtle walks one lane
+through the middle of each, at that cross-section's height `travel`, and clears the rest of the
+cross-section around it. The plan is the list of lane cells it visits, in order, each one next to
+the last.
+
+A mine is dug a few branches at a time, by one job after another. What earlier jobs dug is kept by
+the app (see jobs.lua) as a record, and plan.assign works out from it what the next job digs: any
+branch that was left short first, then new branches in the next free slots. The job's settings
+hold that list, so everything here works the same from the settings alone. ]]
 
 local plan = {}
+
+-- Bumped when the settings a job is saved with change shape, so an old job isn't misread.
+plan.VERSION = 2
 
 plan.DIRS = { [0] = { 0, 1 }, { 1, 0 }, { 0, -1 }, { -1, 0 } }
 
@@ -21,10 +31,19 @@ plan.SIZES = {
 }
 
 plan.SIDES = {
-    { id = "right", label = "To the right" },
-    { id = "left", label = "To the left" },
-    { id = "both", label = "Both sides" },
+    { id = "both", label = "Both sides", sides = { "l", "r" } },
+    { id = "right", label = "To the right", sides = { "r" } },
+    { id = "left", label = "To the left", sides = { "l" } },
 }
+
+-- Which way along x each side of the corridor is.
+plan.SIGN = { l = -1, r = 1 }
+
+-- The most branch slots along one corridor.
+plan.MAX_SLOTS = 128
+
+-- The settings that fix where everything in a mine is. They can't change once a mine is started.
+plan.LAYOUT = { "corridor", "branch", "spacing", "side" }
 
 -- Thrown away when the junk filter is on, unless it's needed for sealing.
 plan.JUNK = {
@@ -52,7 +71,7 @@ local TORCHES = { ["minecraft:torch"] = true, ["minecraft:wall_torch"] = true }
 plan.LIMITS = {
     keep = { 0, 15 * 64 },
     length = { 1, 256 },
-    count = { 1, 64 },
+    count = { 0, 64 },
     spacing = { 1, 16 },
     torches = { 0, 64 },
 }
@@ -61,7 +80,9 @@ function plan.defaults()
     local junk = {}
     for i, name in ipairs(plan.JUNK) do junk[i] = name end
     return {
-        length = 32, count = 4, spacing = 2, side = "right", size = "1x2", connect = false,
+        length = 32, count = 4, spacing = 2, side = "both", corridor = "3x3", branch = "1x2",
+        -- Whether branches an earlier job dug shorter than `length` are made longer.
+        extend = false,
         torches = 12, vein = true, seal = true, junk = true, junkList = junk,
         -- How many of a junk item to carry each trip and put in the chest, by name.
         keep = {},
@@ -74,7 +95,7 @@ local function find(list, id)
     end
 end
 
-function plan.size(config) return find(plan.SIZES, config.size) end
+function plan.size(id) return find(plan.SIZES, id) end
 function plan.side(config) return find(plan.SIDES, config.side) end
 
 -- The settings with anything missing taken from the defaults, or nil and why they can't be used.
@@ -82,6 +103,9 @@ function plan.check(config)
     if type(config) ~= "table" then return nil, "Those settings aren't a table." end
     local out = plan.defaults()
     for key, value in pairs(config) do out[key] = value end
+    -- Settings saved before there was a separate corridor size.
+    if config.size ~= nil and config.branch == nil then out.branch = config.size end
+    out.size, out.connect = nil, nil
     for key, range in pairs(plan.LIMITS) do
         local n = out[key]
         if key == "keep" then n = 0 end
@@ -89,7 +113,8 @@ function plan.check(config)
             return nil, ("The %s has to be a whole number from %d to %d."):format(key, range[1], range[2])
         end
     end
-    if not plan.size(out) then return nil, "That tunnel size isn't one of the choices." end
+    if not plan.size(out.corridor) then return nil, "That corridor size isn't one of the choices." end
+    if not plan.size(out.branch) then return nil, "That branch size isn't one of the choices." end
     if not plan.side(out) then return nil, "That side isn't one of the choices." end
     if type(out.junkList) ~= "table" then return nil, "The junk list isn't a list." end
     for _, name in ipairs(out.junkList) do
@@ -102,7 +127,7 @@ function plan.check(config)
             return nil, ("Junk to keep has to be a whole number from %d to %d."):format(range[1], range[2])
         end
     end
-    for _, key in ipairs({ "connect", "vein", "seal", "junk" }) do out[key] = out[key] == true end
+    for _, key in ipairs({ "extend", "vein", "seal", "junk" }) do out[key] = out[key] == true end
     return out
 end
 
@@ -153,172 +178,229 @@ end
 
 -- Layout -------------------------------------------------------------------------------------------
 
---[[ The mine's measurements:
-  width, height, travel  the cross-section, and the height of the lane in it
-  half                   how far the cross-section reaches either side of the lane
-  pitch                  lane to lane, from one tunnel to the next
-  near, far              the z of the near and far corridors' lanes
-  xs                     each tunnel's x, in the order they're dug ]]
-function plan.shape(config)
-    local size = plan.size(config)
-    local half = (size.width - 1) / 2
-    local pitch = config.spacing + size.width
-    local xs = {}
-    for k = 0, config.count - 1 do
-        if config.side == "right" then
-            xs[#xs + 1] = k * pitch
-        elseif config.side == "left" then
-            xs[#xs + 1] = 0 - k * pitch
-        else
-            xs[#xs + 1] = (k - math.floor((config.count - 1) / 2)) * pitch
-        end
-    end
-    -- The near corridor's lane is pushed forward as far as the cross-section reaches, so a wide
-    -- corridor doesn't dig out the chest.
-    return {
-        width = size.width, height = size.height, travel = size.travel, half = half, pitch = pitch,
-        near = half, far = half + config.length, xs = xs,
-    }
+local function section(id)
+    local size = plan.size(id)
+    return { id = size.id, width = size.width, height = size.height, travel = size.travel, half = (size.width - 1) / 2 }
 end
+
+--[[ The mine's measurements, for a job's settings:
+  corridor, branch  each cross-section: width, height, travel (the lane's height) and half (how far
+                    it reaches either side of the lane)
+  pitch             lane to lane, from one branch slot to the next. Slot k's lane is at z = k * pitch
+  lengths           how long this job leaves each branch it works on, as lengths[slot][side]
+  corridorEnd       the z the corridor reaches once this job is done ]]
+function plan.shape(config)
+    local C, B = section(config.corridor), section(config.branch)
+    local shape = { corridor = C, branch = B, pitch = config.spacing + B.width, lengths = {} }
+    local reach = math.max(config.corridorDug or -1, 0)
+    for _, w in ipairs(config.work or {}) do
+        local slot = shape.lengths[w.slot] or {}
+        shape.lengths[w.slot] = slot
+        slot[w.side] = math.max(slot[w.side] or 0, w.to)
+        reach = math.max(reach, w.slot * shape.pitch)
+    end
+    shape.corridorEnd = reach
+    return shape
+end
+
+-- The z of a slot's lane.
+function plan.slotZ(shape, slot) return slot * shape.pitch end
 
 local function key(x, y, z) return x .. "," .. y .. "," .. z end
 plan.key = key
 
-local function facingOf(dx, dz)
-    for f = 0, 3 do
-        if plan.DIRS[f][1] == dx and plan.DIRS[f][2] == dz then return f end
+-- Records -----------------------------------------------------------------------------------------
+
+--[[ What has been dug in a mine, kept from one job to the next:
+  layout     the settings in plan.LAYOUT, which every job in the mine uses
+  corridor   the z the corridor has been dug to, or -1 before any of it
+  branches   branches[slot][side] = { dug, want }: how far it has been dug, and how far a job set
+             out to dig it. Only branches with some of them dug are here ]]
+function plan.newRecord(config)
+    local layout = {}
+    for _, k in ipairs(plan.LAYOUT) do layout[k] = config[k] end
+    return { layout = layout, corridor = -1, branches = {} }
+end
+
+--[[ A job's settings, from what the person chose and the mine's record, or nil for a new mine. It
+adds:
+  version       plan.VERSION
+  corridorDug   the record's corridor
+  work          what to dig, in order, as a list of { slot, side, from, to }: each branch from
+                `from` blocks out to `to`. Branches left short come first, in the same pass outward
+                as the `count` new ones
+  newBranches   how many of the work items are new branches ]]
+function plan.assign(settings, record)
+    local config = {}
+    for k, v in pairs(settings) do config[k] = v end
+    if record then
+        for _, k in ipairs(plan.LAYOUT) do config[k] = record.layout[k] end
+    end
+    config.version = plan.VERSION
+    config.corridorDug = record and record.corridor or -1
+    local work, new = {}, 0
+    local sides = plan.side(config).sides
+    local branches = record and record.branches or {}
+    for k = 1, plan.MAX_SLOTS do
+        local slot = branches[k]
+        for _, side in ipairs(sides) do
+            local b = slot and slot[side]
+            if b and b.dug > 0 then
+                local want = config.extend and math.max(b.want, config.length) or b.want
+                if b.dug < want then work[#work + 1] = { slot = k, side = side, from = b.dug, to = want } end
+            elseif new < config.count then
+                work[#work + 1] = { slot = k, side = side, from = 0, to = config.length }
+                new = new + 1
+            end
+        end
+    end
+    config.work, config.newBranches = work, new
+    return config
+end
+
+-- How far everything had been dug before step `upto`: { corridor, branches[slot][side] = length }.
+-- Branches with nothing new dug aren't there.
+function plan.progress(config, steps, upto)
+    local out = { corridor = config.corridorDug, branches = {} }
+    for i = 1, math.min(upto - 1, #steps) do
+        local s = steps[i]
+        if s.slice then
+            if s.kind == "corridor" then
+                out.corridor = math.max(out.corridor, s.z)
+            else
+                local b = out.branches[s.slot] or {}
+                out.branches[s.slot] = b
+                b[s.side] = math.max(b[s.side] or 0, s.along)
+            end
+        end
+    end
+    return out
+end
+
+-- Adds what a job dug before step `upto` to a mine's record.
+function plan.record(record, config, steps, upto)
+    local p = plan.progress(config, steps, upto)
+    record.corridor = math.max(record.corridor, p.corridor)
+    for _, w in ipairs(config.work) do
+        local got = p.branches[w.slot] and p.branches[w.slot][w.side] or 0
+        local slot = record.branches[w.slot] or {}
+        local b = slot[w.side]
+        if got > 0 or b then
+            b = b or { dug = 0, want = 0 }
+            b.dug, b.want = math.max(b.dug, got), math.max(b.want, w.to)
+            slot[w.side] = b
+            record.branches[w.slot] = slot
+        end
     end
 end
+
+-- Steps ---------------------------------------------------------------------------------------------
 
 local function sign(n) return n > 0 and 1 or n < 0 and -1 or 0 end
 
 --[[ The lane cells in the order they're visited. Each step is
-  x, z    where it is. The lane is at y = shape.travel
-  dir     the facing the tunnel runs in here, for the cross-section
-  slice   whether to clear the cross-section and look around. False for cells already done, and
-          for walking back along a tunnel
-  torch   the facing to put a torch in a niche in the wall, for a 1x2 lane, or true to put it on
-          the floor below a raised lane. Nil for none
-  tunnel  which tunnel it's in, by its place in shape.xs, or nil for a corridor ]]
+  x, y, z  where it is
+  kind     "corridor" or "branch", for the cross-section
+  dir      the facing the corridor or branch runs in here, for the cross-section
+  slice    whether to clear the cross-section and look around. False for cells already done, and
+           for walking back
+  torch    the facing to put a torch in a niche in the wall, for a lane on the floor, or true to
+           put it on the floor below a raised lane. Nil for none
+  tunnel   which item of config.work it's on the way into or out of, or nil in the corridor
+  slot, side, along   for a branch: where it is, and how many blocks out from the corridor
+
+The turtle goes up the corridor, and out and back along each branch on the way. Where the corridor
+and branches have their lanes at different heights, it changes height in the middle of the
+corridor. It ends back at the corridor's first cell. ]]
 function plan.steps(config)
     local shape = plan.shape(config)
-    local steps, sliced = {}, {}
-    local x, z = 0, shape.near
+    local C, B = shape.corridor, shape.branch
     local N = config.torches
+    local steps, sliced = {}, {}
+    local x, y, z = 0, C.travel, 0
 
-    local function torchFor(cx, cz, f, tunnel)
-        if N == 0 then return nil end
-        local along = (f % 2 == 0) and (cz - shape.near) or cx
-        if along == 0 or along % N ~= 0 then return nil end
-        -- Not right next to the chest, which may be a double chest.
-        if not tunnel and cz == shape.near and math.abs(cx) <= 1 then return nil end
-        if shape.travel > 0 then return true end
-        -- A niche on the side away from the tunnels.
-        if tunnel then return 3 end
-        return cz == shape.near and 2 or 0
+    -- Torches in the corridor stay out of the rows branches leave from, so they're never in the
+    -- way of the turtle changing height or of a branch's walls. One that would be there moves on
+    -- to the next row clear of them.
+    local function clearOfBranches(cz)
+        local r = cz % shape.pitch
+        return r > B.half and r < shape.pitch - B.half
+    end
+    local function corridorTorch(cz)
+        if cz < 1 or not clearOfBranches(cz) then return false end
+        while cz >= 1 do
+            if cz % N == 0 then return true end
+            cz = cz - 1
+            if cz < 1 or clearOfBranches(cz) then return false end
+        end
+        return false
     end
 
-    local function add(cx, cz, f, mine, tunnel)
-        local k = key(cx, 0, cz)
+    local function torchFor(s)
+        if N == 0 then return nil end
+        if s.kind == "corridor" then
+            if not corridorTorch(s.z) then return nil end
+            if C.travel > 0 then return true end
+            -- A niche in the wall, away from the branches if they're only on one side.
+            return config.side == "left" and 1 or 3
+        end
+        if s.along % N ~= 0 then return nil end
+        if B.travel > 0 then return true end
+        return 2
+    end
+
+    local function add(kind, cx, cy, cz, f, mine, info)
+        local k = key(cx, cy, cz)
         local slice = mine and not sliced[k]
         if slice then sliced[k] = true end
-        steps[#steps + 1] = {
-            x = cx, z = cz, dir = f, slice = slice, tunnel = tunnel,
-            torch = slice and torchFor(cx, cz, f, tunnel) or nil,
-        }
+        local s = { x = cx, y = cy, z = cz, dir = f, kind = kind, slice = slice }
+        for name, v in pairs(info or {}) do s[name] = v end
+        if slice then s.torch = torchFor(s) end
+        steps[#steps + 1] = s
+        x, y, z = cx, cy, cz
     end
 
-    -- Along a straight line, not including where it starts.
-    local function go(tx, tz, mine, tunnel)
-        local dx, dz = sign(tx - x), sign(tz - z)
-        local f = facingOf(dx, dz)
-        while x ~= tx or z ~= tz do
-            x, z = x + dx, z + dz
-            add(x, z, f, mine, tunnel)
+    add("corridor", 0, C.travel, 0, 0, config.corridorDug < 0)
+    for index, w in ipairs(config.work) do
+        local zk = plan.slotZ(shape, w.slot)
+        for cz = z + 1, zk do add("corridor", 0, C.travel, cz, 0, cz > config.corridorDug) end
+        local s = plan.SIGN[w.side]
+        local out, back = s > 0 and 1 or 3, s > 0 and 3 or 1
+        local function info(along)
+            return { tunnel = index, slot = w.slot, side = w.side, along = along }
+        end
+        if y ~= B.travel then add("corridor", 0, B.travel, zk, out, false, info()) end
+        for o = 1, C.half do add("corridor", s * o, B.travel, zk, out, false, info()) end
+        for along = 1, w.to do
+            add("branch", s * (C.half + along), B.travel, zk, out, along > w.from, info(along))
+        end
+        for along = w.to - 1, 1, -1 do
+            add("branch", s * (C.half + along), B.travel, zk, back, false, info(along))
+        end
+        for o = C.half, 0, -1 do add("corridor", s * o, B.travel, zk, back, false, info()) end
+        -- Straight on to the other side of the same slot, without climbing back to the lane.
+        local nextWork = config.work[index + 1]
+        if y ~= C.travel and not (nextWork and nextWork.slot == w.slot) then
+            add("corridor", 0, C.travel, zk, 0, false, info())
         end
     end
-
-    local first = shape.xs[1]
-    add(0, shape.near, first > 0 and 1 or first < 0 and 3 or 0, true, nil)
-    if first ~= 0 then go(first, shape.near, true) end
-
-    for k, tx in ipairs(shape.xs) do
-        local last = k == #shape.xs
-        if config.connect then
-            -- Up one tunnel, along the far corridor, down the next.
-            local out = k % 2 == 1
-            go(tx, out and shape.far or shape.near, true, k)
-            if not last then go(shape.xs[k + 1], z, true) end
-        else
-            go(tx, shape.far, true, k)
-            go(tx, shape.near, false, k)
-            if not last then go(shape.xs[k + 1], shape.near, true) end
-        end
-    end
-
-    if config.connect then
-        -- The serpentine joins every other pair of tunnels at each end. Fill in the rest of both
-        -- corridors, nearest gap first, then go home.
-        local lo, hi = math.min(0, shape.xs[1], shape.xs[#shape.xs]), math.max(0, shape.xs[1], shape.xs[#shape.xs])
-        local lanes = {}
-        for _, s in ipairs(steps) do lanes[key(s.x, 0, s.z)] = true end
-        local gaps = {}
-        for cx = lo, hi do
-            for _, cz in ipairs({ shape.near, shape.far }) do
-                lanes[key(cx, 0, cz)] = true
-                if not sliced[key(cx, 0, cz)] and (cz == shape.near or (cx >= math.min(shape.xs[1], shape.xs[#shape.xs])
-                    and cx <= math.max(shape.xs[1], shape.xs[#shape.xs]))) then
-                    gaps[#gaps + 1] = { cx, cz }
-                end
-            end
-        end
-        local function walkTo(tx, tz)
-            local route = plan.route(lanes, { x, 0, z }, { tx, 0, tz })
-            for i = 2, #route do
-                local c = route[i]
-                local f = facingOf(c[1] - x, c[3] - z)
-                local tunnel
-                for k, kx in ipairs(shape.xs) do
-                    if kx == c[1] and c[3] ~= shape.near and c[3] ~= shape.far then tunnel = k end
-                end
-                x, z = c[1], c[3]
-                add(x, z, f, true, tunnel)
-            end
-        end
-        while true do
-            local best, bestDistance
-            for i, g in ipairs(gaps) do
-                if not sliced[key(g[1], 0, g[2])] then
-                    local d = math.abs(g[1] - x) + math.abs(g[2] - z)
-                    if not best or d < bestDistance then best, bestDistance = i, d end
-                end
-            end
-            if not best then break end
-            walkTo(gaps[best][1], gaps[best][2])
-        end
-        walkTo(0, shape.near)
-    else
-        go(0, shape.near, false)
-    end
-    steps[1].dir = steps[2] and steps[2].dir or 0
+    for cz = z - 1, 0, -1 do add("corridor", 0, C.travel, cz, 2, false) end
     return steps
 end
 
--- From the start, on the floor, up and forward to the first lane cell.
+-- From the start, on the floor, up to the first lane cell.
 function plan.entry(config)
-    local shape = plan.shape(config)
-    local cells = { { 0, 0, 0 } }
-    for y = 1, shape.travel do cells[#cells + 1] = { 0, y, 0 } end
-    for z = 1, shape.near do cells[#cells + 1] = { 0, shape.travel, z } end
+    local C = section(config.corridor)
+    local cells = {}
+    for y = 0, C.travel do cells[#cells + 1] = { 0, y, 0 } end
     return cells
 end
 
 -- Where the turtle can go: every lane cell of the plan and the way in. Cells it hasn't reached yet
 -- are in the plan anyway, so cutting through them on the way to the chest only digs them early.
 function plan.walkable(config, steps)
-    local shape = plan.shape(config)
     local cells = {}
-    for _, step in ipairs(steps) do cells[key(step.x, shape.travel, step.z)] = true end
+    for _, step in ipairs(steps) do cells[key(step.x, step.y, step.z)] = true end
     for _, c in ipairs(plan.entry(config)) do cells[key(c[1], c[2], c[3])] = true end
     return cells
 end
@@ -357,30 +439,30 @@ end
 
 -- A distance the walk from this lane cell to the start can't be more than.
 function plan.homeBound(shape, x, z)
-    return math.abs(x) + math.abs(z - shape.near) + shape.pitch + shape.near + shape.travel
+    return math.abs(x) + math.abs(z) + shape.corridor.travel + 3
 end
 
--- Whether a cell is in any tunnel or corridor of the mine.
-function plan.inside(shape, config, x, y, z)
-    if y < 0 or y >= shape.height then return false end
-    local lo, hi = 0, 0
-    for _, tx in ipairs(shape.xs) do
-        lo, hi = math.min(lo, tx), math.max(hi, tx)
-        if math.abs(x - tx) <= shape.half and z >= shape.near - shape.half and z <= shape.far + shape.half then
-            return true
-        end
+-- Whether a cell is in the corridor, or in a branch this job digs.
+function plan.inside(shape, x, y, z)
+    local C, B = shape.corridor, shape.branch
+    if math.abs(x) <= C.half then
+        return y >= 0 and y < C.height and z >= 0 and z <= shape.corridorEnd
     end
-    if x < lo - shape.half or x > hi + shape.half then return false end
-    if math.abs(z - shape.near) <= shape.half then return true end
-    return config.connect and math.abs(z - shape.far) <= shape.half
+    if y < 0 or y >= B.height then return false end
+    local k = math.floor((z + B.half) / shape.pitch)
+    if k < 1 or math.abs(z - k * shape.pitch) > B.half then return false end
+    local slot = shape.lengths[k]
+    local length = slot and (x > 0 and slot.r or slot.l)
+    return length ~= nil and math.abs(x) - C.half <= length
 end
 
 -- The cross-section of a step, as a list of { x, y, z }.
 function plan.section(shape, step)
+    local cs = shape[step.kind]
     local cells = {}
     local right = plan.DIRS[(step.dir + 1) % 4]
-    for o = -shape.half, shape.half do
-        for y = 0, shape.height - 1 do
+    for o = -cs.half, cs.half do
+        for y = 0, cs.height - 1 do
             cells[#cells + 1] = { step.x + o * right[1], y, step.z + o * right[2] }
         end
     end
@@ -389,12 +471,12 @@ end
 
 -- Cost ----------------------------------------------------------------------------------------------
 
--- Moves to clear one cross-section, beyond stepping into it.
-function plan.sliceMoves(config, shape)
+-- Moves to clear one cross-section `cs` (shape.corridor or shape.branch), beyond stepping into it.
+function plan.sliceMoves(config, cs)
     local looking = config.vein or config.seal
-    local columns = shape.width
+    local columns = cs.width
     local sideways = (columns - 1) * 2
-    local vertical = looking and 2 * (shape.height - 1) or 0
+    local vertical = looking and 2 * (cs.height - 1) or 0
     return sideways + columns * vertical
 end
 
@@ -404,17 +486,23 @@ hold, before veins. ]]
 function plan.estimate(config, steps, from)
     local shape = plan.shape(config)
     from = from or 1
-    local moves, slices = 0, 0
+    local moves, blocks = 0, 0
     for i = from, #steps do
         moves = moves + 1
-        if steps[i].slice then slices = slices + 1 end
+        local s = steps[i]
+        if s.slice then
+            local cs = shape[s.kind]
+            moves = moves + plan.sliceMoves(config, cs)
+            blocks = blocks + cs.width * cs.height
+        end
     end
-    moves = moves + slices * plan.sliceMoves(config, shape) + 2 * (shape.travel + shape.near)
-    local blocks = slices * shape.width * shape.height
+    moves = moves + 2 * shape.corridor.travel
     -- Veins add about a tenth, and each trip to the chest walks out and back.
     local extra = config.vein and math.ceil(moves / 10) or 0
     local trips = math.ceil(blocks / (config.junk and 900 or 600))
-    local reach = math.abs(shape.xs[#shape.xs]) + config.length
+    local longest = 0
+    for _, w in ipairs(config.work) do longest = math.max(longest, w.to) end
+    local reach = shape.corridorEnd + shape.corridor.half + longest
     return { fuel = moves + extra + trips * reach, blocks = blocks }
 end
 

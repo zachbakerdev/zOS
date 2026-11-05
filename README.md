@@ -164,6 +164,7 @@ folder under `apps/`.
 | [`apps/fileshare`](apps/fileshare) | **File Share** | Sends files directly between computers you've verified, see [File Share](#file-share) |
 | [`apps/storage`](apps/storage) | **Storage** | Searches chests on a wired network and moves items in and out through one chest, see [Storage](#storage) |
 | [`apps/minesweeper`](apps/minesweeper) | **Minesweeper** | The classic game, see [Minesweeper](#minesweeper) |
+| [`apps/strip-mine`](apps/strip-mine) | **Strip Mine** | Digs a strip mine with a turtle, and watches it from other computers, see [Strip Mine](#strip-mine) |
 | [`apps/setup-disk`](apps/setup-disk) | **Setup Disk** | Erases a floppy, writes the latest release's installer and image to it with any root servers you choose, and labels it `zOS vX.X.X` |
 
 ### Making app disks
@@ -259,6 +260,17 @@ can't make it hand over the wrong thing. **Settings** chooses where the index is
   Every computer that uses the same chests and chooses that drive shares one index, so items one of
   them stores are found by all the others without reading the chests.
 
+**Auto chests** keep other chests on the network stocked. Choose **Add a chest**, then **Add an
+item** for each thing to keep there and how many, such as a stack of coal and a stack of torches.
+Every few seconds, and straight away after a change, Storage brings out whatever the chest is short
+of and puts back whatever it has too many of. Anything in it that isn't listed is put into storage,
+so a chest with nothing listed empties itself into storage. This runs in the app's service, so it
+carries on while nobody is logged in. An auto chest can't also be the I/O chest or a storage chest.
+For example, give a Strip Mine turtle's chest a modem and make it an auto chest with coal and
+torches: the turtle always finds fuel, and whatever it brings back goes into storage.
+
+The app and its service take turns with the chests, so they never save the index over each other.
+
 Items added to or taken from a storage chest by hand, or by a hopper, aren't seen until the app next
 reads that chest. **Rebuild item index** in **Settings** reads every chest again. If the network drive
 is missing, the app reads the chests each time instead, and says the index wasn't saved.
@@ -305,6 +317,62 @@ cells around it.
 | Back to the levels | Q or Backspace | |
 
 Best times belong to each user, in `/home/<user>/.config/minesweeper/`.
+
+### Strip Mine
+
+**Strip Mine** digs a row of parallel tunnels with a mining turtle. Put the turtle on the floor
+where the mine should start, facing the way the tunnels should go, with a chest right behind it.
+Open Strip Mine on the turtle, choose **New mine**, set it up and choose **Start mining**.
+
+The tunnels start from a corridor that runs sideways from the start, so they're always joined at
+the near end. **Far ends: joined** digs a second corridor across the far ends, and the turtle
+snakes up one tunnel and down the next.
+
+| setting | what it does |
+|---------|--------------|
+| Length | How far each tunnel goes, from the corridor |
+| Tunnels | How many tunnels to dig |
+| Spacing | Solid blocks left between tunnels. 2 finds nearly every ore with vein mining on |
+| Side | Whether the tunnels spread out to the right, to the left or both ways |
+| Size | 1 wide and 2 high, 1 wide and 3 high, or 3 by 3 |
+| Far ends | Whether to join the tunnels at the far end too |
+| Torches | How many blocks apart to put torches, or 0 for none. In a 1x2 tunnel they go in a small niche in the wall, otherwise on the floor |
+| Vein mining | Dig out any ore it sees in the walls, floor or ceiling, and the rest of the vein, up to 8 blocks from the tunnel |
+| Seal hazards | Fill holes in the floor, and block off lava and water in the walls, with blocks it dug |
+| Junk | Throw away stone, dirt, gravel and the like instead of carrying them. **Add from the turtle** adds whatever's in its inventory. Choose an item to keep some of it: it carries up to that many each trip, seals with them first, and puts the rest in the chest |
+
+It goes back to the chest to unload when it's full, and to refuel when it's low. It takes coal,
+charcoal and coal blocks from the chest, and torches if it uses them, wherever they are in the chest.
+It keeps one stack of junk for sealing holes, and any junk you chose to keep some of, and throws
+the rest away rather than filling the chest with it. The settings screen shows about how much fuel the whole mine needs.
+
+The digging is done by the app's service, so leaving the app or logging out doesn't stop it, and
+neither does the turtle being unloaded. It saves where it is before every move and turn, and when
+it starts again it uses its fuel level to tell whether a move happened, and looks around to tell
+whether a turn did. In the rare case it can't be sure, it stops and says so. Carry it back to the
+start, facing forward with the chest behind it, and press **B** to carry on from there. On a server
+that gives turtles unlimited fuel, the fuel level can't show whether a move happened, so this
+happens more often.
+
+While it works, its screen shows how far it has got, its fuel and what it has found:
+
+| key | does |
+|-----|------|
+| P | Pause where it is |
+| H | Go back to the chest and wait there |
+| R | Resume |
+| C | Go back to the chest and end the mine |
+| M | The computers allowed to control it |
+| Q | Leave the app. The mine carries on |
+
+**Watching from another computer.** Open Strip Mine on a computer or pocket computer to see the
+mining turtles in range, through a wireless modem on each. Anyone in range can see what a turtle is
+doing. To control one, choose it and press **A**. Then, on the turtle, choose **Remote control**,
+compare the fingerprint and allow it. The same keys then work from that computer. The turtle uses
+port 4204.
+
+The job, and the computers allowed to control it, are in `/etc/strip-mine/`. The last settings
+used belong to each user, in `/home/<user>/.config/strip-mine/`.
 
 ## Networking
 

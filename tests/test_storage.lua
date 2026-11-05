@@ -335,7 +335,7 @@ end
 do
   local c = ready(chest(27), chest(27), chest(27), { spare = chest(27) })
   screenHas(c, "Store all")
-  key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "end") key(c, "up") key(c, "enter")
   screenHas(c, "I/O chest: io")
   check("settings: keeps the count", screenHas(c, "Storage chests: 2"))
   key(c, "down") key(c, "enter")
@@ -394,7 +394,7 @@ end
 do
   local function settings(c)
     screenHas(c, "Store all")
-    key(c, "down") key(c, "down") key(c, "enter")
+    key(c, "end") key(c, "up") key(c, "enter")
     screenHas(c, "I/O chest: io")
   end
 
@@ -435,7 +435,7 @@ do
   local c = start(world)
   c.env.require("util").writeTable("/" .. CONFIG, { io = "gone", allowed = { a = true, b = true } })
   screenHas(c, "Store all")
-  key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "end") key(c, "up") key(c, "enter")
   check("disconnected: one left", screenHas(c, "Disconnected chests: 1"))
   key(c, "down") key(c, "down") key(c, "enter")
   screenHas(c, "Remove all")
@@ -833,7 +833,7 @@ local INDEX = "etc/storage/index"
 
 local function settings(c)
   screenHas(c, "Store all")
-  key(c, "home") key(c, "down") key(c, "down") key(c, "enter")
+  key(c, "end") key(c, "up") key(c, "enter")
   screenHas(c, "Item index:")
 end
 
@@ -1096,6 +1096,150 @@ do
   c.files[INDEX] = "not an index"
   recallFirst(c, "")
   check("damaged: read again", screenHas(c, "A x1"))
+end
+
+-- Auto chests ---------------------------------------------------------------------------------------
+
+local function autoConfig(c, targets)
+  c.env.require("util").writeTable("/" .. CONFIG, {
+    io = "io", allowed = { a = true, b = true }, auto = { auto = { targets = targets } },
+  })
+end
+
+local COAL, TORCH = "x:coal#nil", "x:torch#nil"
+
+-- Balancing: too many goes back, too few comes out, and anything not listed is stored.
+do
+  local a = chest(27, { { "x:coal", 64 }, { "x:coal", 36 } })
+  local b = chest(27)
+  local auto = chest(9, { { "x:coal", 10 }, { "x:dirt", 5 }, { "x:torch", 64 }, { "x:torch", 16 } })
+  local c = ready(chest(27), a, b, { auto = auto })
+  local targets = { { key = COAL, id = "x:coal", name = "Coal", count = 64 }, { key = TORCH, id = "x:torch", name = "Torch", count = 64 } }
+  autoConfig(c, targets)
+  local array = c.env.require("array")
+  local result = sim.call(c, function() return array.balance(array.load(), "auto", targets) end)
+  check("balance: tops up", total(auto, "x:coal") == 64)
+  check("balance: takes the extra out", total(auto, "x:torch") == 64)
+  check("balance: stores what isn't listed", total(auto, "x:dirt") == 0 and total(a, "x:dirt") + total(b, "x:dirt") == 5)
+  check("balance: counts", result.stored == 21 and result.recalled == 54)
+  check("balance: storage has the rest", total(a, "x:coal") + total(b, "x:coal") == 46)
+  check("balance: lets go of the lock", not c.files["etc/storage/lock"])
+  local stored = sim.call(c, function() return array.items(array.load()) end)
+  local found = {}
+  for _, item in ipairs(stored) do found[item.id] = item.count end
+  check("balance: the index keeps up", found["x:coal"] == 46 and found["x:torch"] == 16 and found["x:dirt"] == 5)
+
+  local again = sim.call(c, function() return array.balance(array.load(), "auto", targets) end)
+  check("balance: nothing to do reads nothing", again.stored == 0 and again.recalled == 0)
+
+  -- Short of something storage doesn't have: it brings what there is.
+  local more = { { key = COAL, id = "x:coal", name = "Coal", count = 200 } }
+  local partial = sim.call(c, function() return array.balance(array.load(), "auto", more) end)
+  check("balance: brings what there is", total(auto, "x:coal") == 110 and partial.recalled == 46)
+  check("balance: stores what's no longer listed", total(auto, "x:torch") == 0)
+end
+
+-- A lock left behind by a restart doesn't stop anything.
+do
+  local c = ready(chest(27, { { "x:a", 3 } }), chest(27), chest(27))
+  c.env.require("util").writeTable("/etc/storage/lock", { time = 1e9 })
+  screenHas(c, "Store all")
+  key(c, "enter")
+  check("lock: an old one is ignored", screenHas(c, "Stored 3 items"))
+  check("lock: let go of afterwards", not c.files["etc/storage/lock"])
+end
+
+-- The service keeps it stocked while something takes from it and puts things in.
+do
+  local a = chest(27, { { "x:coal", 64 }, { "x:coal", 64 }, { "x:torch", 64 } })
+  local auto = chest(9)
+  local c = ready(chest(27), a, chest(27), { auto = auto })
+  autoConfig(c, { { key = COAL, id = "x:coal", name = "Coal", count = 64 }, { key = TORCH, id = "x:torch", name = "Torch", count = 32 } })
+  local fn = assert(loadfile("apps/storage/service.lua"))
+  setfenv(fn, c.env)
+  local service = sim.spawn(c, fn, { id = "storage" })
+  sim.advance(1)
+  check("service: fills it at the start", total(auto, "x:coal") == 64 and total(auto, "x:torch") == 32)
+
+  -- A turtle takes coal and leaves what it dug.
+  auto.slots[1].count = 20
+  auto.slots[5] = { name = "x:diamond", count = 3 }
+  auto.slots[6] = { name = "x:cobblestone", count = 64 }
+  sim.advance(6)
+  check("service: tops it up", total(auto, "x:coal") == 64)
+  check("service: stores what was left", total(auto, "x:diamond") == 0 and total(auto, "x:cobblestone") == 0)
+  check("service: into storage", total(a, "x:diamond") == 3)
+  check("service: still running", not service.done)
+
+  -- The app changes the targets: the service looks straight away.
+  local cfg = c.env.require("array").load()
+  cfg.auto.auto.targets[2].count = 10
+  c.env.require("array").save(cfg)
+  c.env.os.queueEvent("storage_auto")
+  sim.advance(0.5)
+  check("service: looks when woken", total(auto, "x:torch") == 10)
+end
+
+-- Setting one up from the menu.
+do
+  local a = chest(27, { { "x:coal", 64 }, { "x:coal", 64 } })
+  local auto = chest(9, { { "x:torch", 5 } })
+  local c, world = ready(chest(27), a, chest(27), { auto = auto })
+  screenHas(c, "Store all")
+  key(c, "down") key(c, "down") key(c, "enter")
+  screenHas(c, "Add a chest")
+  key(c, "enter")
+  screenHas(c, "Find it by adding an item")
+  check("auto: storage chests aren't offered", not c.screenText():find("\n a +\n")
+    and not c.screenText():find("\n io +\n") and c.screenText():find("\n auto +\n"))
+  key(c, "down") key(c, "enter")
+  screenHas(c, "Add an item")
+  check("auto: saved", config(c).auto.auto ~= nil)
+  key(c, "enter")
+  screenHas(c, "Item:")
+  check("auto: offers what's in the chest too", screenHas(c, "Torch x5"))
+  typed(c, "coal")
+  key(c, "enter")
+  screenHas(c, "Amount:")
+  typed(c, "1s")
+  key(c, "enter")
+  screenHas(c, "Coal: 64 (has 0)")
+  local targets = config(c).auto.auto.targets
+  check("auto: target saved", #targets == 1 and targets[1].key == COAL and targets[1].count == 64)
+
+  -- Change it, then remove the chest.
+  key(c, "enter")
+  screenHas(c, "Keep 64")
+  key(c, "enter")
+  screenHas(c, "Amount:")
+  typed(c, "10")
+  key(c, "enter")
+  screenHas(c, "Coal: 10")
+  check("auto: changed", config(c).auto.auto.targets[1].count == 10)
+
+  -- Settings can't use it for storage while it's an auto chest, and saving keeps it.
+  key(c, "backspace")
+  screenHas(c, "Auto chests")
+  key(c, "backspace")
+  screenHas(c, "Store all")
+  key(c, "end") key(c, "up") key(c, "enter")
+  screenHas(c, "Storage chests: 2")
+  key(c, "down") key(c, "enter")
+  screenHas(c, "Done")
+  check("auto: not offered for storage", not c.screenText():find("auto", 1, true))
+  key(c, "backspace")
+  key(c, "end") key(c, "enter")
+  screenHas(c, "Store all")
+  check("auto: settings keep it", config(c).auto.auto and config(c).auto.auto.targets[1].count == 10)
+
+  key(c, "home") key(c, "down") key(c, "down") key(c, "enter")
+  screenHas(c, "Add a chest")
+  key(c, "enter")
+  screenHas(c, "Stop managing this chest")
+  key(c, "end") key(c, "up") key(c, "enter")
+  screenHas(c, "Add a chest")
+  check("auto: removed", next(config(c).auto) == nil)
+  check("auto: the items stay", total(auto, "x:torch") == 5)
 end
 
 if failed > 0 then

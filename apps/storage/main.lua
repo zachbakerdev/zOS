@@ -78,7 +78,17 @@ local function findChest(chests, unlinked, text)
     end
 end
 
+-- The chests that aren't auto chests, which are the only ones setup can choose.
+local function notAuto(draft, chests)
+    local out = {}
+    for _, chest in ipairs(chests) do
+        if not (draft.auto and draft.auto[chest.name]) then out[#out + 1] = chest end
+    end
+    return out
+end
+
 local function chooseIo(draft, chests, unlinked)
+    chests = notAuto(draft, chests)
     local items = { { label = "Find it by adding an item", hint = "Put an item in the chest you want" } }
     for _, chest in ipairs(chests) do
         items[#items + 1] = {
@@ -101,7 +111,7 @@ local function chooseStorage(draft, chests, unlinked)
     local selected = 1
     while true do
         local usable = {}
-        for _, chest in ipairs(chests) do
+        for _, chest in ipairs(notAuto(draft, chests)) do
             if chest.name ~= draft.io and (not io or array.connected(io, chest)) then
                 usable[#usable + 1] = chest
             end
@@ -284,7 +294,7 @@ local function setup(config)
     local chests, unlinked = waitForChests()
     if not chests then return nil end
 
-    local draft = { io = config and config.io, allowed = {}, index = config and config.index }
+    local draft = { io = config and config.io, allowed = {}, index = config and config.index, auto = config and config.auto or {} }
     for name in pairs(config and config.allowed or {}) do draft.allowed[name] = true end
     if not config then
         draft.io = defaultIo(chests, unlinked)
@@ -417,7 +427,7 @@ end
 
 -- Filter `stored` as the user types. Returns the chosen item, or nil if they cancelled. `status` is
 -- what the last recall did, shown until the user starts typing.
-local function chooseItem(stored, offline, status, statusColor)
+local function chooseItem(stored, offline, status, statusColor, title)
     local LABEL = "Item: "
     local text, found = "", stored
     local selected, top = 1, 1
@@ -437,7 +447,7 @@ local function chooseItem(stored, offline, status, statusColor)
         if selected < top then top = selected end
         if selected >= top + rows then top = selected - rows + 1 end
 
-        ui.screen(TITLE .. " - Recall", #found .. "/" .. #stored)
+        ui.screen(TITLE .. " - " .. (title or "Recall"), #found .. "/" .. #stored)
         for i, line in ipairs(statusLines) do ui.at(2, 4 + i, line, statusColor) end
         for i = 0, rows - 1 do
             local item = found[top + i]
@@ -499,7 +509,7 @@ end
 
 -- Ask how many of `item` to recall. Returns { count = n } or { stacks = n }, nil to fill the I/O
 -- chest, or false if the user went back. Only a number, with an s after it for stacks, can be typed.
-local function chooseAmount(item)
+local function chooseAmount(item, title, help)
     local LABEL = "Amount: "
     local stack = item.stack or 64
     local text = ""
@@ -507,12 +517,12 @@ local function chooseAmount(item)
     term.setCursorBlink(true)
     while true do
         local _, height = term.getSize()
-        ui.screen(TITLE .. " - Recall")
+        ui.screen(TITLE .. " - " .. (title or "Recall"))
         ui.text(item.name .. " x" .. countLabel(item), ui.theme.accent)
         ui.text("")
         ui.text("")
         ui.text("")
-        ui.text("Type how many, or leave it empty to fill the I/O chest.", ui.theme.dim)
+        ui.text(help or "Type how many, or leave it empty to fill the I/O chest.", ui.theme.dim)
         ui.text("Add s for stacks: 2s is " .. 2 * stack .. ".", ui.theme.dim)
         if text == "" then ui.at(2, height - 1, "Backspace: back", ui.theme.dim) end
         ui.at(2, 5, LABEL, ui.theme.accent)
@@ -577,9 +587,177 @@ local function recall(config)
     end
 end
 
+-- Auto chests -------------------------------------------------------------------------------------
+
+local AUTO = "Auto chest"
+
+local function saveAuto(config)
+    local ok, err = array.save(config)
+    if not ok then return ui.message(TITLE, "Couldn't save the settings: " .. tostring(err), ui.theme.bad) end
+    os.queueEvent(array.WAKE)
+end
+
+-- Choose a chest to keep stocked. Returns its name, or nil.
+local function chooseAutoChest(config)
+    ui.screen(TITLE .. " - " .. AUTO)
+    ui.text("Looking for chests...")
+    local chests, unlinked = array.discover(progressBar())
+    local io = byName(chests, config.io)
+    local usable = {}
+    for _, chest in ipairs(chests) do
+        if chest.name ~= config.io and not config.allowed[chest.name] and not config.auto[chest.name]
+            and (not io or array.connected(io, chest)) then
+            usable[#usable + 1] = chest
+        end
+    end
+    if #usable == 0 then
+        ui.message(TITLE, "Every chest on the network is already used. Connect another with a wired " ..
+            "modem, or untick a storage chest in Settings.", ui.theme.bad)
+        return nil
+    end
+    local items = { { label = "Find it by adding an item", hint = "Put an item in the chest you want" } }
+    for _, chest in ipairs(usable) do items[#items + 1] = { label = chestLabel(chest), hint = chestHint(chest) } end
+    local choice = ui.menu({ title = TITLE .. " - Choose a chest", items = items, back = true })
+    if not choice then return nil end
+    if choice > 1 then return usable[choice - 1].name end
+    local chest = findChest(usable, unlinked, "Put any item in the chest to keep stocked.")
+    return chest and chest.name
+end
+
+-- Every item it could keep: what's in storage, and what's in the chest already.
+local function itemsToKeep(config, name)
+    ui.screen(TITLE .. " - " .. AUTO)
+    ui.text("Searching...")
+    local stored, offline = array.items(config, progressBar())
+    local known = {}
+    for _, item in ipairs(stored) do known[item.key] = true end
+    for _, item in ipairs(array.itemsIn(name) or {}) do
+        if not known[item.key] then stored[#stored + 1] = item end
+    end
+    table.sort(stored, function(a, b) return a.name < b.name end)
+    return stored, offline
+end
+
+-- How many to keep, as a number of items, or nil if the user went back.
+local function chooseTarget(item)
+    local amount = chooseAmount(item, AUTO, "Type how many to keep in the chest.")
+    if not amount then return nil end
+    local count = amount.count or amount.stacks * (item.stack or 64)
+    return count > 0 and count or nil
+end
+
+local function addTarget(config, name)
+    local stored, offline = itemsToKeep(config, name)
+    if #stored == 0 then
+        return ui.message(TITLE, "There's nothing in storage or in the chest to choose from.", ui.theme.bad)
+    end
+    local item = chooseItem(stored, offline, nil, nil, AUTO)
+    if not item then return end
+    local count = chooseTarget(item)
+    if not count then return end
+    local targets = config.auto[name].targets
+    for i, target in ipairs(targets) do
+        if target.key == item.key then table.remove(targets, i) break end
+    end
+    targets[#targets + 1] = { key = item.key, id = item.id, name = item.name, count = count }
+    table.sort(targets, function(a, b) return a.name < b.name end)
+    saveAuto(config)
+end
+
+local function editTarget(config, name, target)
+    local choice = ui.menu({
+        title = TITLE .. " - " .. target.name, back = true,
+        items = {
+            { label = "Keep " .. target.count, hint = "Change how many to keep" },
+            { label = "Stop keeping it", hint = "Anything left goes into storage" },
+            { label = "Back", fg = ui.theme.dim },
+        },
+    })
+    if choice == 1 then
+        local count = chooseTarget({ name = target.name, count = target.count, stack = nil })
+        if count then target.count = count end
+    elseif choice == 2 then
+        local targets = config.auto[name].targets
+        for i, other in ipairs(targets) do
+            if other == target then table.remove(targets, i) break end
+        end
+    else
+        return
+    end
+    saveAuto(config)
+end
+
+local function editAuto(config, name)
+    local selected = 1
+    while true do
+        local auto = config.auto[name]
+        if not auto then return end
+        local counts = array.counts(name)
+        local items = {}
+        for _, target in ipairs(auto.targets) do
+            local has = counts and " (has " .. (counts[target.key] or 0) .. ")" or ""
+            items[#items + 1] = {
+                label = target.name .. ": " .. target.count .. has, target = target, submenu = true,
+                hint = "Change how many to keep",
+            }
+        end
+        items[#items + 1] = { label = "Add an item", action = "add", submenu = true, hint = "Keep some of an item in it" }
+        items[#items + 1] = { label = "Stop managing this chest", action = "remove", hint = "Items in it stay there" }
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+        selected = ui.menu({
+            title = TITLE .. " - " .. name, status = counts and nil or "not connected",
+            items = items, selected = selected, back = true,
+        })
+        local item = selected and items[selected]
+        if not item or item.label == "Back" then return end
+        if item.target then
+            editTarget(config, name, item.target)
+        elseif item.action == "add" then
+            addTarget(config, name)
+        elseif item.action == "remove" then
+            config.auto[name] = nil
+            saveAuto(config)
+            return
+        end
+    end
+end
+
+local function autoChests(config)
+    local selected = 1
+    while true do
+        local names = {}
+        for name in pairs(config.auto) do names[#names + 1] = name end
+        table.sort(names)
+        local items = {}
+        for _, name in ipairs(names) do
+            items[#items + 1] = {
+                label = name, name = name, submenu = true,
+                hint = #config.auto[name].targets == 0 and "Everything put in it is stored"
+                    or plural(#config.auto[name].targets, "item") .. " kept stocked",
+            }
+        end
+        items[#items + 1] = { label = "Add a chest", action = "add", submenu = true, hint = "Keep a chest stocked with items" }
+        items[#items + 1] = { label = "Back", fg = ui.theme.dim }
+        selected = ui.menu({ title = TITLE .. " - Auto chests", items = items, selected = selected, back = true })
+        local item = selected and items[selected]
+        if not item or item.label == "Back" then return end
+        if item.name then
+            editAuto(config, item.name)
+        else
+            local name = chooseAutoChest(config)
+            if name then
+                config.auto[name] = { targets = {} }
+                saveAuto(config)
+                editAuto(config, name)
+            end
+        end
+    end
+end
+
 local function main()
     local config = array.load() or setup(nil)
     if not config then return end
+    config.auto = config.auto or {}
 
     local selected = 1
     while true do
@@ -589,6 +767,7 @@ local function main()
             items = {
                 { label = "Store all", hint = "Move everything in the I/O chest into storage" },
                 { label = "Recall item", submenu = true, hint = "Fill the I/O chest with an item" },
+                { label = "Auto chests", submenu = true, hint = "Keep chests stocked with set amounts" },
                 { label = "Settings", submenu = true, hint = "Choose the chests and where the item index is kept" },
                 { label = "Exit" },
             },
@@ -599,7 +778,10 @@ local function main()
         elseif choice == 2 then
             recall(config)
         elseif choice == 3 then
+            autoChests(config)
+        elseif choice == 4 then
             config = setup(config) or config
+            config.auto = config.auto or {}
         else
             return
         end
